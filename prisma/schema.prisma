@@ -1,0 +1,319 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// SeguriKids · Esquema de datos del prototipo
+//
+// Proveedor: SQLite (prototipo local, cero configuración).
+// Migración a PostgreSQL: basta cambiar `provider` y `DATABASE_URL`; no se usan
+// características específicas de SQLite.
+//
+// NOTA DE DISEÑO: SQLite no soporta `enum` en Prisma, por lo que los campos de
+// tipo catálogo (rol, estado, tipo de evento…) se almacenan como String y su
+// dominio se valida en `src/lib/domain/*` con Zod y tipos TypeScript literales.
+// Así el dominio queda documentado y tipado en un único lugar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Centro educativo. El prototipo opera con un único centro DEMO,
+/// pero el modelo ya es multi-centro (todas las entidades cuelgan de School).
+model School {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  address   String?
+  phone     String?
+  status    String   @default("ACTIVE") // ACTIVE | INACTIVE
+  timezone  String   @default("America/Mexico_City")
+  entryTime String   @default("08:00") // referencia de puntualidad
+  exitTime  String   @default("13:00")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  students          Student[]
+  authorizedPeople  AuthorizedPerson[]
+  emergencyAlerts   EmergencyAlert[]
+  incidents         Incident[]
+  conversations     Conversation[]
+}
+
+/// Usuario del sistema. Un único modelo para los tres roles: el rol determina
+/// la interfaz y los permisos (ver `src/lib/auth/permissions.ts`).
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  /// DEMO: hash SHA-256 sin salt, suficiente para el prototipo.
+  /// PRODUCCIÓN: sustituir por bcrypt/argon2 + política de contraseñas.
+  passwordHash String
+  role         String // ADMIN | STAFF | PARENT
+  phone        String?
+  jobTitle     String? // cargo, solo para ADMIN/STAFF
+  avatarTone   String   @default("brand") // color del avatar generado
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// Alumnos de los que este usuario es tutor principal (solo rol PARENT).
+  children Student[] @relation("TutorChildren")
+
+  /// Ficha de persona autorizada vinculada al propio tutor (su QR personal).
+  authorizedPersonProfile AuthorizedPerson? @relation("PersonAccount")
+
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  registeredEvents   AttendanceEvent[] @relation("RegisteredBy")
+  createdAlerts      EmergencyAlert[]  @relation("AlertCreatedBy")
+  resolvedAlerts     EmergencyAlert[]  @relation("AlertResolvedBy")
+  reportedIncidents  Incident[]        @relation("IncidentReportedBy")
+  sentMessages       Message[]         @relation("MessageSender")
+  parentConversations Conversation[]   @relation("ConversationParent")
+  staffConversations  Conversation[]   @relation("ConversationStaff")
+  createdAuthorizations StudentAuthorizedPerson[] @relation("AuthorizationCreatedBy")
+
+  @@index([schoolId, role])
+}
+
+/// Alumno. `status` es el estado operativo del día y lo actualiza
+/// exclusivamente el servicio de accesos (`src/server/services/attendance.ts`).
+model Student {
+  id         String    @id @default(cuid())
+  firstName  String
+  lastName   String
+  group      String // p. ej. "Kínder A"
+  status     String    @default("ABSENT") // IN_CAMPUS | OFF_CAMPUS | ABSENT | PENDING
+  birthDate  DateTime?
+  bloodType  String?
+  allergies  String?
+  notes      String?
+  avatarTone String    @default("brand")
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// Tutor principal (usuario con rol PARENT).
+  tutorId String
+  tutor   User   @relation("TutorChildren", fields: [tutorId], references: [id])
+
+  authorizations   StudentAuthorizedPerson[]
+  attendanceEvents AttendanceEvent[]
+  incidents        Incident[]
+
+  @@index([schoolId, status])
+  @@index([tutorId])
+}
+
+/// Persona habilitada para recoger alumnos. Su `qrIdentifier` es el único dato
+/// que viaja dentro del código QR (identificador opaco, sin datos personales).
+model AuthorizedPerson {
+  id           String   @id @default(cuid())
+  name         String
+  relationship String // MOTHER | FATHER | GRANDPARENT | TUTOR | RELATIVE | OTHER
+  phone        String?
+  /// Últimos dígitos de una identificación oficial: se muestran para el cotejo
+  /// visual en la entrega, sin almacenar el documento completo.
+  documentTail String?
+  status       String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  qrIdentifier String   @unique // formato SK-DEMO-000123
+  avatarTone   String   @default("mint")
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// Si la persona autorizada es además usuario de la app (el tutor).
+  userId String? @unique
+  user   User?   @relation("PersonAccount", fields: [userId], references: [id])
+
+  authorizations   StudentAuthorizedPerson[]
+  attendanceEvents AttendanceEvent[]
+  incidents        Incident[]
+
+  @@index([schoolId, status])
+}
+
+/// Relación N:M alumno ↔ persona autorizada. `active` permite revocar una
+/// autorización concreta sin borrar el historial.
+model StudentAuthorizedPerson {
+  id        String   @id @default(cuid())
+  active    Boolean  @default(true)
+  /// Relación declarada para ESTE alumno (puede diferir entre hermanos).
+  relationship String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  authorizedPersonId String
+  authorizedPerson   AuthorizedPerson @relation(fields: [authorizedPersonId], references: [id], onDelete: Cascade)
+
+  createdById String?
+  createdBy   User?   @relation("AuthorizationCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([studentId, authorizedPersonId])
+  @@index([authorizedPersonId, active])
+}
+
+/// Movimiento de acceso: entrada o salida del plantel.
+model AttendanceEvent {
+  id        String   @id @default(cuid())
+  type      String // ENTRY | EXIT
+  method    String // QR | MANUAL
+  timestamp DateTime @default(now())
+  note      String?
+  /// Minutos de retraso respecto al horario del centro (entradas).
+  latencyMin Int?
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// Persona que entrega o recoge al alumno (nulo en registros manuales sin acompañante).
+  authorizedPersonId String?
+  authorizedPerson   AuthorizedPerson? @relation(fields: [authorizedPersonId], references: [id])
+
+  /// Usuario escolar que confirmó la acción.
+  registeredById String
+  registeredBy   User   @relation("RegisteredBy", fields: [registeredById], references: [id])
+
+  @@index([studentId, timestamp])
+  @@index([timestamp])
+}
+
+/// Notificación interna (simulación de push). Se genera desde los servicios,
+/// nunca desde la UI.
+model Notification {
+  id        String   @id @default(cuid())
+  type      String // ENTRY | EXIT | SCHOOL_INFO | EMERGENCY | SYSTEM
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  /// Ruta interna a la que navega la notificación al pulsarla.
+  link      String?
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
+
+/// Hilo de conversación escuela ↔ tutor.
+model Conversation {
+  id        String   @id @default(cuid())
+  subject   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  parentId String
+  parent   User   @relation("ConversationParent", fields: [parentId], references: [id], onDelete: Cascade)
+
+  staffId String
+  staff   User   @relation("ConversationStaff", fields: [staffId], references: [id], onDelete: Cascade)
+
+  messages Message[]
+
+  @@index([parentId, updatedAt])
+  @@index([staffId, updatedAt])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  senderId String
+  sender   User   @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+/// Alerta de emergencia del centro.
+model EmergencyAlert {
+  id         String    @id @default(cuid())
+  type       String // EVACUATION | MEDICAL | SECURITY | GENERAL
+  title      String
+  message    String
+  priority   String // LOW | MEDIUM | HIGH | CRITICAL
+  status     String    @default("ACTIVE") // ACTIVE | RESOLVED
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  resolutionNote String?
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation("AlertCreatedBy", fields: [createdById], references: [id])
+
+  resolvedById String?
+  resolvedBy   User?   @relation("AlertResolvedBy", fields: [resolvedById], references: [id])
+
+  @@index([schoolId, status])
+}
+
+/// Incidencia operativa: intento de recogida no autorizada, retraso, etc.
+model Incident {
+  id          String   @id @default(cuid())
+  type        String // UNAUTHORIZED_PICKUP | UNKNOWN_CODE | SUSPENDED_PERSON | HEALTH | OTHER
+  severity    String   @default("MEDIUM") // LOW | MEDIUM | HIGH
+  description String
+  status      String   @default("OPEN") // OPEN | REVIEWING | CLOSED
+  createdAt   DateTime @default(now())
+  closedAt    DateTime?
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id])
+
+  authorizedPersonId String?
+  authorizedPerson   AuthorizedPerson? @relation(fields: [authorizedPersonId], references: [id])
+
+  reportedById String
+  reportedBy   User   @relation("IncidentReportedBy", fields: [reportedById], references: [id])
+
+  @@index([schoolId, status])
+}
+
+/// Bitácora de auditoría. Se escribe desde `src/server/services/audit.ts`.
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // LOGIN | LOGOUT | STUDENT_CREATE | QR_SCAN | EXIT_REGISTER | ...
+  entity    String? // Student | AuthorizedPerson | EmergencyAlert…
+  entityId  String?
+  summary   String
+  /// JSON serializado con el contexto de la acción.
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([userId])
+}

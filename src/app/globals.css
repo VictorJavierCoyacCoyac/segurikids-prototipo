@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+    /* Altura de la barra de navegación inferior en móvil. */
+    --mobile-nav-h: 4.5rem;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-ink-50 text-ink-900 antialiased;
+    /* Respeta las áreas seguras de dispositivos con notch. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Foco visible y consistente: requisito de accesibilidad. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+
+  ::selection {
+    @apply bg-brand-200 text-brand-900;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .sk-card {
+    @apply rounded-3xl border border-ink-100 bg-white shadow-card;
+  }
+
+  .sk-label {
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
+  }
+
+  .sk-input {
+    @apply w-full rounded-2xl border border-ink-200 bg-white px-4 py-3 text-base text-ink-900
+      placeholder:text-ink-400 transition
+      focus:border-brand-400 focus:outline-none focus:ring-4 focus:ring-brand-100
+      disabled:cursor-not-allowed disabled:bg-ink-50 disabled:text-ink-400;
+  }
+
+  .sk-input-error {
+    @apply border-berry-400 focus:border-berry-500 focus:ring-berry-100;
+  }
+
+  /* Contenedor de tablas: en móvil se desplaza en horizontal sin romper la página. */
+  .sk-table-wrap {
+    @apply -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0;
+  }
+
+  .sk-table {
+    @apply w-full min-w-[640px] border-collapse text-left text-sm;
+  }
+
+  .sk-table thead th {
+    @apply whitespace-nowrap border-b border-ink-100 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-500;
+  }
+
+  .sk-table tbody td {
+    @apply border-b border-ink-50 px-4 py-3 align-middle text-ink-700;
+  }
+
+  .sk-table tbody tr:hover {
+    @apply bg-ink-50/60;
+  }
+
+  /* Superficie con degradado suave para cabeceras destacadas. */
+  .sk-hero {
+    @apply bg-gradient-to-br from-brand-700 via-brand-600 to-brand-500 text-white;
+  }
+}
+
+@layer utilities {
+  .sk-safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+  }
+
+  /* Oculta la barra de desplazamiento manteniendo el scroll (carruseles móviles). */
+  .sk-no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .sk-no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sk-grid-dots {
+    background-image: radial-gradient(rgb(255 255 255 / 0.18) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+}
+
+/* Reduce animaciones si el sistema lo solicita. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
