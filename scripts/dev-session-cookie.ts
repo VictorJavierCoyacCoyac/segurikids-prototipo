@@ -5,6 +5,10 @@
  *
  * Uso:  npx tsx scripts/dev-session-cookie.ts padre@demo.local
  *
+ * Imprime el par `nombre=valor` listo para `curl -b`, con el nombre de cookie
+ * que corresponde al área del rol (ver `src/lib/auth/session.ts`): cada área
+ * tiene su propia cookie para permitir sesiones simultáneas.
+ *
  * ⚠️ Solo para desarrollo local con datos ficticios.
  */
 import { createHmac } from "node:crypto";
@@ -25,7 +29,8 @@ async function main() {
   ).toString("base64url");
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
 
-  process.stdout.write(`${payload}.${signature}\n`);
+  const area = user.role === "PARENT" ? "app" : user.role === "STAFF" ? "staff" : "admin";
+  process.stdout.write(`sk_session_${area}=${payload}.${signature}\n`);
 }
 
 main()

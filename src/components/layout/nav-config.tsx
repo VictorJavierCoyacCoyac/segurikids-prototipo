@@ -16,6 +16,7 @@ import {
   ScanLine,
   ScrollText,
   ShieldAlert,
+  Megaphone,
   Siren,
   User,
   UserRound,
@@ -68,6 +69,7 @@ export const STAFF_NAV: NavSection[] = [
     items: [
       { href: "/staff/entrada", label: "Registrar entrada", icon: LogIn },
       { href: "/staff/salida", label: "Registrar salida", icon: LogOut },
+      { href: "/staff/voceo", label: "Voceo y asistente", icon: Megaphone },
       { href: "/staff/actividad", label: "Actividad reciente", icon: Activity },
     ],
   },

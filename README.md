@@ -23,6 +23,8 @@ SeguriKids sustituye ese proceso manual por un control digital que:
 - **valida su autorización antes de permitir la entrega** y bloquea los casos no
   autorizados;
 - avisa automáticamente al padre o tutor cuando su hijo entra o sale;
+- **vocea en voz alta** el nombre del alumno en cuanto se valida el QR, para que
+  el aula sepa que han llegado por él;
 - permite la comunicación escuela ↔ familia;
 - difunde alertas de emergencia a toda la comunidad escolar;
 - genera reportes de asistencia, puntualidad, recogidas e incidencias;
@@ -51,7 +53,8 @@ automático de la salida.
 | ORM | Prisma 6 |
 | Base de datos | SQLite (migrable a PostgreSQL sin cambios de código) |
 | Validación | Zod |
-| Códigos QR | `qrcode` (generación) + `BarcodeDetector` nativo (lectura) |
+| Códigos QR | `qrcode` (generación) + `BarcodeDetector` nativo con respaldo `jsqr` (lectura) |
+| Voz | Web Speech API del navegador (`speechSynthesis`) |
 
 Decisiones deliberadas para mantener el prototipo ligero y fácil de modificar:
 
@@ -59,8 +62,13 @@ Decisiones deliberadas para mantener el prototipo ligero y fácil de modificar:
   (`src/components/ui/stat.tsx`), lo que evita ~100 kB de JavaScript.
 - **Sin librería de componentes.** El sistema de diseño vive en
   `src/components/ui/`, es pequeño y se adapta sin luchar contra estilos ajenos.
-- **Sin dependencia de escáner.** La lectura usa la API nativa del navegador y
-  siempre existe una alternativa manual y otra simulada.
+- **Lectura de QR sin dependencia obligatoria.** Se usa la API nativa del
+  navegador; `jsqr` se carga de forma dinámica **solo** donde esa API no existe
+  (iOS/Safari, Firefox), y siempre existe una alternativa manual y otra
+  simulada.
+- **Sin servicio de voz ni de IA.** El voceo lo sintetiza el propio navegador y
+  el asistente del mostrador responde desde un catálogo cerrado de respuestas,
+  así que no hay claves de API ni datos saliendo del dispositivo.
 - **Sin fuentes remotas.** Se usa la pila tipográfica del sistema, de modo que
   la aplicación compila y funciona sin conexión a Internet.
 
@@ -83,7 +91,8 @@ una server action que valida permisos y datos de entrada.
 ```
 src/
 ├── app/                          Rutas (App Router)
-│   ├── login/                    Acceso + cuentas demo
+│   ├── login/                    Acceso + cuentas demo + sesiones abiertas
+│   ├── terminos/                 Términos y aviso de privacidad (+ aceptación)
 │   ├── app/                      📱 App familiar (padre / tutor)
 │   ├── staff/                    🏫 Panel del personal escolar
 │   ├── admin/                    📊 Panel de dirección
@@ -95,11 +104,12 @@ src/
 │   ├── ui/                       Sistema de diseño (botones, tarjetas, campos…)
 │   ├── layout/                   Estructuras de navegación por rol
 │   └── domain/                   Componentes de negocio reutilizables
-│       └── scanner/              ⭐ Consola de control de salida
+│       ├── scanner/              ⭐ Consola de control de salida
+│       └── voice/                Voceo por voz y asistente guionizado
 │
 ├── lib/
-│   ├── auth/                     Sesión demo, contraseñas y matriz de permisos
-│   ├── domain/                   Catálogos: estados, roles, tipos, etiquetas
+│   ├── auth/                     Sesión por área, contraseñas y permisos
+│   ├── domain/                   Catálogos: estados, roles, términos, voceo
 │   ├── validation/               Esquemas Zod compartidos
 │   ├── utils/                    Fechas, formato, CSV, clases CSS
 │   └── db.ts                     Cliente Prisma único
@@ -118,10 +128,10 @@ src/
 │   │   └── users.ts              Tutores y personal
 │   └── actions/                  Server actions (validan permisos y entrada)
 │
-├── middleware.ts                 Primera barrera de acceso por ruta
+├── middleware.ts                 Barrera de acceso + resolución del área
 └── prisma/
     ├── schema.prisma             Modelo relacional documentado
-    ├── migrations/               Migración inicial
+    ├── migrations/               Migración inicial + aceptación de términos
     └── seed.ts                   Escenario DEMO completo y determinista
 ```
 
@@ -129,6 +139,55 @@ El corazón del sistema es `registerMovement()` en
 [`src/server/services/attendance.ts`](src/server/services/attendance.ts): es la
 **única** función que modifica el estado de un alumno, de forma que ese estado
 siempre es consecuencia de un movimiento auditado.
+
+### Sesiones simultáneas (dos dispositivos, dos pestañas)
+
+El sistema se usa en dos dispositivos a la vez —el tutor con su QR y el docente
+con el escáner— y durante una demostración también en dos pestañas del mismo
+navegador. Con una sola cookie de sesión eso sería imposible: la segunda sesión
+sobreescribiría la primera.
+
+Por eso **la sesión no es una cookie, sino una por área de la aplicación**:
+
+| Área | Ruta | Cookie | Rol |
+| --- | --- | --- | --- |
+| App familiar | `/app` | `sk_session_app` | `PARENT` |
+| Personal escolar | `/staff` | `sk_session_staff` | `STAFF` |
+| Dirección | `/admin` | `sk_session_admin` | `ADMIN` |
+
+`src/middleware.ts` deduce el área de la ruta y la inyecta en la cabecera
+`x-sk-area`; `getCurrentUser()` lee entonces la cookie que corresponde. Así cada
+pestaña usa su propia sesión **sin parámetros en la URL ni estado en el
+cliente**, y cerrar la sesión del docente no tira la del tutor.
+
+Detalles que sostienen el diseño:
+
+- La cookie de un área solo acepta los roles de esa área, de modo que una
+  cookie reutilizada no otorga acceso donde no corresponde.
+- `/staff` admite además la cookie de dirección, porque un `ADMIN` puede operar
+  el control de acceso. Si existen las dos sesiones, manda la del personal.
+- Las rutas de `/api` no tienen área propia. `/api/reports/export` fija
+  explícitamente el área `admin`; `/api/qr` acepta cualquier sesión porque la
+  credencial la consultan tanto el tutor como dirección.
+- La pantalla de acceso ya no expulsa a quien tiene sesión: **lista las sesiones
+  abiertas** y permite añadir otra cuenta.
+
+**Límite conocido:** una sesión por área y navegador. Dos cuentas de tutor a la
+vez en el mismo navegador siguen requiriendo dos perfiles de navegador o dos
+dispositivos.
+
+### Términos y aviso de privacidad
+
+El texto vive en [`src/lib/domain/terms.ts`](src/lib/domain/terms.ts) y lo
+comparten la consulta pública (`/terminos`) y la pantalla de aceptación, para
+que lo que se acepta coincida con lo que se puede volver a leer.
+
+La aceptación se guarda en `User.termsAcceptedAt` **junto con la versión**
+(`User.termsVersion`), no como un booleano: si el documento cambia, cambia
+`TERMS_VERSION` y el sistema vuelve a pedir el consentimiento en lugar de dar
+por válido el anterior. La comprobación está centralizada en `requireUser()`,
+así que ninguna pantalla nueva puede olvidarse de ella, y cada aceptación queda
+en la auditoría como `TERMS_ACCEPT`.
 
 ### Modelo de datos
 
@@ -198,10 +257,11 @@ Abre <http://localhost:3000>.
 | `npm run db:studio` | Explorador visual de la base de datos |
 | `npm run verify` | ⭐ Verifica automáticamente los flujos de demostración |
 
-`npm run verify` ejecuta 57 comprobaciones sobre una base de datos
+`npm run verify` ejecuta 75 comprobaciones sobre una base de datos
 independiente (`prisma/verify.db`, no toca tus datos) y confirma que la recogida
-autorizada, el bloqueo de personas no autorizadas, las emergencias, la auditoría
-y los reportes funcionan de verdad.
+autorizada, el bloqueo de personas no autorizadas, las emergencias, la auditoría,
+los reportes, las sesiones por área, la aceptación de términos y el voceo
+funcionan de verdad.
 
 ---
 
@@ -235,6 +295,54 @@ Mientras el puerto esté público cualquiera con el enlace entra, y las
 credenciales demo están visibles en la propia pantalla. Los datos son ficticios,
 pero conviene volver a poner el puerto en privado al terminar.
 
+### La cámara del móvil
+
+El escáner lee el QR con la cámara del dispositivo del personal, y para eso el
+navegador exige un **contexto seguro**:
+
+| Cómo se abre el prototipo | ¿Cámara? |
+| --- | --- |
+| `http://localhost:3000` | ✅ sí — `localhost` se considera seguro |
+| Enlace **https** del túnel de VS Code | ✅ sí — es el caso real en el móvil |
+| `http://192.168.x.x:3000` (IP de la red local) | ❌ no — el navegador la bloquea |
+
+Es decir: para escanear desde un teléfono hay que usar el **enlace https del
+túnel**, no la IP local. Por la IP local el resto de la aplicación funciona
+(incluido mostrar el QR del tutor), pero el botón de cámara avisa de que hace
+falta una conexión segura en lugar de fallar en silencio.
+
+Dos motores de decodificación, elegidos automáticamente:
+
+1. **`BarcodeDetector`**, la API nativa del navegador (Chrome/Edge y Android).
+2. **`jsqr`**, decodificador en JavaScript que se carga **solo** si la API
+   nativa no existe — iOS/Safari y Firefox, donde el escáner quedaría
+   inservible. Se importa de forma dinámica para no cargar el decodificador en
+   los navegadores que no lo necesitan.
+
+Los fotogramas se analizan en el dispositivo y se descartan: no se graba ni se
+envía imagen a ningún servidor. Si no hay cámara, la entrada manual del código y
+«Simular escaneo» ejecutan **la misma** validación de servidor.
+
+### El voceo de recogida
+
+Al validarse un QR con resultado **AUTORIZADO**, el dispositivo del personal
+anuncia en voz alta el nombre del alumno, su grupo y quién lo espera, usando la
+síntesis de voz del propio navegador (Web Speech API). El texto se muestra
+siempre en pantalla, de modo que el aviso sigue siendo útil sin voz, con el
+altavoz silenciado o con ruido.
+
+- Un intento **bloqueado no se vocea nunca**: anunciar en público un acceso
+  denegado expondría a la persona y al menor.
+- El aviso no incluye teléfonos, domicilios ni el identificador QR.
+- El silencio se recuerda por dispositivo (`localStorage`), no por cuenta: la
+  tablet de recepción vocea; el móvil de un docente en el aula quizá no debe.
+- `/staff/voceo` añade el **voceo manual** de un alumno y un **asistente de
+  mostrador**. El asistente es **guionizado**: responde desde un catálogo
+  cerrado de palabras clave en
+  [`src/lib/domain/announcements.ts`](src/lib/domain/announcements.ts). No hay
+  modelo de lenguaje ni llamadas de red, así que ningún dato del centro sale del
+  dispositivo, y la interfaz lo dice para no sugerir una capacidad que no tiene.
+
 ## 5. Cuentas demo
 
 Todas usan la contraseña **`demo1234`** y aparecen como botones de acceso rápido
@@ -248,6 +356,13 @@ en la pantalla de login.
 
 También existen `docente2@demo.local`, `docente3@demo.local` y
 `tutor2@demo.local` … `tutor11@demo.local` con la misma contraseña.
+
+> **`tutor11@demo.local` (Tomás Aguilar) se deja a propósito sin aceptar los
+> términos**, para poder mostrar la pantalla de aceptación del primer acceso sin
+> tener que dar de alta un usuario nuevo. Al entrar con esa cuenta, el sistema
+> la lleva a `/terminos/aceptar` y no la deja operar hasta que acepta. Las tres
+> cuentas destacadas ya los tienen aceptados para que la demostración entre
+> directa al panel.
 
 ### Códigos QR preparados para la demostración
 
@@ -264,7 +379,9 @@ También existen `docente2@demo.local`, `docente3@demo.local` y
 ## 6. DEMO PRINCIPAL
 
 > **Escenario:** un tutor llega al centro a recoger a su hija. Duración: unos
-> 3 minutos. Conviene tener dos ventanas o dos dispositivos abiertos.
+> 3 minutos. Se juega con **dos pestañas o dos dispositivos a la vez**: cada
+> área de la aplicación mantiene su propia sesión, así que no hay que cerrar
+> una para abrir la otra (ver §3, *Sesiones simultáneas*).
 
 ### Preparación
 
@@ -273,7 +390,7 @@ npm run db:seed   # deja el escenario en su estado inicial
 npm run dev
 ```
 
-### Paso 1 · La familia muestra su código (ventana A)
+### Paso 1 · La familia muestra su código (pestaña A)
 
 1. Entra en <http://localhost:3000> y pulsa **Padre / Tutor** (Carmen Martínez).
 2. En el inicio verás que **Sofía Martínez** y **Emiliano Martínez** están
@@ -282,16 +399,22 @@ npm run dev
    `SK-DEMO-000101`.
    *Observa el aviso: el QR solo contiene un identificador, nunca datos del
    menor.*
+4. Pulsa **Mostrar a pantalla completa**: el código queda solo, al máximo
+   tamaño y con la pantalla bloqueada para que no se apague. Es la vista que se
+   enseña en la puerta.
 
-### Paso 2 · El personal escanea (ventana B)
+### Paso 2 · El personal escanea (pestaña B)
 
-4. Abre otra ventana en <http://localhost:3000>, cierra sesión si hace falta y
-   entra como **Personal escolar** (Ricardo Peña).
-5. Pulsa **Abrir escáner**.
-6. Elige una de las tres vías — las tres ejecutan exactamente la misma
+5. Abre **otra pestaña** en <http://localhost:3000>. La pantalla de acceso lista
+   la sesión del tutor como abierta y te deja **añadir otra cuenta** sin
+   cerrarla. Entra como **Personal escolar** (Ricardo Peña).
+6. Pulsa **Abrir escáner**.
+7. Elige una de las tres vías — las tres ejecutan exactamente la misma
    validación en el servidor:
    - **Código** → escribe `SK-DEMO-000101` y pulsa *Validar identificación*.
-   - **Cámara** → activa la cámara y apunta al QR de la ventana A.
+   - **Cámara** → activa la cámara y apunta al QR de la pestaña A (o al
+     teléfono del tutor). Requiere **https o localhost**: ver §4,
+     *La cámara del móvil*.
    - **Simular** → elige *Carmen Martínez* en la lista (cada fila indica el
      resultado que producirá).
 
@@ -300,9 +423,14 @@ npm run dev
 7. La pantalla muestra un **AUTORIZADO** verde e inequívoco, con la persona, su
    relación, el identificador, la hora y —si la tiene registrada— los últimos
    dígitos de su identificación para el cotejo visual.
-8. Debajo aparecen **los dos alumnos** que puede recoger, preseleccionados.
+8. **El dispositivo vocea el aviso en voz alta**: «Atención, grupo … Ya llegaron
+   por Sofía Martínez. Carmen Martínez, madre, espera en recepción…». El texto
+   queda también en pantalla, y puede repetirse o silenciarse desde el propio
+   aviso. Un intento **bloqueado nunca se vocea**: avisar en público de un
+   acceso denegado expondría a la persona y al menor.
+9. Debajo aparecen **los dos alumnos** que puede recoger, preseleccionados.
    Puedes desmarcar a uno si solo se lleva a la otra.
-9. Pulsa **Confirmar entrega**.
+10. Pulsa **Confirmar entrega**.
 
 ### Paso 4 · Comprueba que todo el sistema reaccionó
 
@@ -324,12 +452,12 @@ El comprobante ya enumera los efectos automáticos. Verifícalos uno a uno:
 
 ## 7. Segundo flujo · Persona NO autorizada
 
-10. En el escáner, valida el código **`SK-DEMO-000202`** (Luis Ángel Ortega).
-11. La pantalla muestra un **NO AUTORIZADO** rojo y bloqueante, explicando que
+11. En el escáner, valida el código **`SK-DEMO-000202`** (Luis Ángel Ortega).
+12. La pantalla muestra un **NO AUTORIZADO** rojo y bloqueante, explicando que
     la persona existe pero su autorización fue revocada. **No hay ningún botón
     para entregar al alumno.**
-12. Pulsa **Reportar incidencia**, descríbela y guárdala.
-13. Comprueba en **Admin → Auditoría** que quedó registrado el *Escaneo
+13. Pulsa **Reportar incidencia**, descríbela y guárdala.
+14. Comprueba en **Admin → Auditoría** que quedó registrado el *Escaneo
     rechazado*, y en **Admin → Emergencias** la incidencia abierta.
 
 Variantes con el mismo comportamiento bloqueante:
@@ -351,21 +479,58 @@ ya no aparece entre los alumnos entregables. Vuelve a autorizarla y reaparece.
 
 ## 8. Tercer flujo · Emergencia
 
-14. Como **Personal escolar**, entra en *Alertas e incidencias* → **Activar
+15. Como **Personal escolar**, entra en *Alertas e incidencias* → **Activar
     emergencia**.
-15. Elige el tipo (evacuación, médica, seguridad o aviso general), escribe el
+16. Elige el tipo (evacuación, médica, seguridad o aviso general), escribe el
     mensaje y confirma. Hay un paso de confirmación explícito porque la acción
     notifica a todo el centro.
-16. La alerta aparece de inmediato, destacada en rojo, en los tres perfiles.
-17. Como **Padre / Tutor**, revisa *Avisos*: recibiste la notificación de
+17. La alerta aparece de inmediato, destacada en rojo, en los tres perfiles.
+18. Como **Padre / Tutor**, revisa *Avisos*: recibiste la notificación de
     emergencia.
-18. Como **Administración**, entra en *Emergencias*, pulsa **Resolver**, añade
+19. Como **Administración**, entra en *Emergencias*, pulsa **Resolver**, añade
     una nota de cierre y confirma. Las familias reciben el aviso de que la
     situación quedó resuelta.
 
 ---
 
-## 9. Recorrido por perfiles
+## 9. Cuarto flujo · Ciclo de vida completo de un tutor
+
+> **Escenario:** una familia nueva se incorpora al centro, deja al niño por la
+> mañana y lo recoge por la tarde. Es el recorrido que une las cuatro piezas:
+> alta de cuenta, aceptación de términos, entrada y recogida con voceo.
+
+**1 · Alta de la cuenta.** Como **Administración** → *Padres y tutores* →
+**Nuevo tutor**. Rellena nombre, correo, teléfono, parentesco y contraseña
+inicial. El sistema crea la cuenta **y su credencial QR**, y lo registra en la
+auditoría como `USER_CREATE`. En el directorio, la cuenta aparece marcada como
+*Términos pendientes*.
+
+**2 · Vinculación con el alumno.** En *Alumnos* → ficha del alumno, asigna la
+cuenta nueva como **Tutor principal**. Sin esto el tutor no tendría a quién
+recoger.
+
+**3 · Primer acceso y consentimiento.** En otra pestaña, entra con la cuenta
+nueva (o con `tutor11@demo.local`, que el seed deja pendiente a propósito). El
+sistema **no la deja pasar al panel**: la lleva a la pantalla de aceptación, con
+el texto completo y una casilla que hay que marcar. Al aceptar, queda registrada
+la fecha y la versión del documento, y la auditoría guarda un `TERMS_ACCEPT`.
+El dato se ve después en *Mi perfil* → «Términos aceptados».
+
+**4 · Entrada por la mañana.** Como **Personal escolar** → *Registrar entrada*,
+marca al alumno. Pasa a `EN PLANTEL` y el tutor recibe el aviso.
+
+**5 · Recogida por la tarde.** El tutor abre *Mi QR* → **Mostrar a pantalla
+completa**; el docente lo escanea con la cámara. Al validarse, el dispositivo
+**vocea** «Ya llegaron por …», el docente confirma la entrega y el tutor recibe
+la notificación de salida.
+
+**6 · Rastro completo.** En **Admin → Auditoría** está la secuencia entera:
+`USER_CREATE` → `TERMS_ACCEPT` → `LOGIN` → `ENTRY_REGISTER` → `QR_SCAN` →
+`EXIT_REGISTER`.
+
+---
+
+## 10. Recorrido por perfiles
 
 ### 📱 Padre / Tutor — `/app`
 
@@ -373,12 +538,13 @@ Mobile first, pensado para usarse con una mano en la puerta del colegio.
 
 - **Inicio** — estado de cada hijo, accesos rápidos, últimos movimientos y avisos.
 - **Mis hijos** / **Detalle** — estado, datos de salud, quién puede recogerlo e historial.
-- **Mi QR** — credencial a pantalla completa con los alumnos que permite recoger.
+- **Mi QR** — credencial con los alumnos que permite recoger, y vista **a
+  pantalla completa** (con bloqueo de apagado) para enseñarla en la puerta.
 - **Personas autorizadas** — alta de personas y revocación por alumno.
 - **Historial** — últimos 30 días, filtrable por alumno, tipo y fechas.
 - **Avisos** — centro de notificaciones con estado leído/no leído.
 - **Mensajes** — conversaciones con el centro.
-- **Perfil** — datos de la cuenta y cierre de sesión.
+- **Perfil** — datos de la cuenta, aceptación de términos y cierre de sesión.
 
 ### 🏫 Personal escolar — `/staff`
 
@@ -386,6 +552,8 @@ Mobile first, pensado para usarse con una mano en la puerta del colegio.
 - **Escáner QR** ⭐ — la pantalla crítica: tres modos de entrada, un solo flujo.
 - **Registrar entrada / salida** — vía manual para las excepciones, con la misma
   validación de autorización.
+- **Voceo y asistente** — voceo manual de un alumno y asistente guionizado de
+  mostrador.
 - **Alumnos** — búsqueda rápida y ficha completa.
 - **Autorizaciones** — consulta de apoyo antes de una entrega.
 - **Actividad reciente** — bitácora operativa filtrable.
@@ -395,8 +563,10 @@ Mobile first, pensado para usarse con una mano en la puerta del colegio.
 
 - **Dashboard** — «¿qué está pasando ahora mismo?» en un vistazo.
 - **Alumnos** — alta, edición, filtros y ficha con historial.
-- **Padres y tutores** — directorio, alumnos asociados y credenciales.
-- **Personal** — cuentas del centro y matriz de permisos vigente.
+- **Padres y tutores** — directorio, alumnos asociados, credenciales, estado de
+  los términos y **alta de tutores**.
+- **Personal** — cuentas del centro, matriz de permisos, estado de los términos y
+  **alta de personal**.
 - **Personas autorizadas** — alta, suspensión y historial de recogidas.
 - **Movimientos** — trazabilidad completa con exportación CSV.
 - **Reportes** — asistencia, puntualidad, recogidas, grupos e incidencias.
@@ -406,7 +576,7 @@ Mobile first, pensado para usarse con una mano en la puerta del colegio.
 
 ---
 
-## 10. Datos de demostración
+## 11. Datos de demostración
 
 El seed (`prisma/seed.ts`) genera un escenario **determinista** —misma semilla,
 mismos datos— con:
@@ -422,6 +592,8 @@ mismos datos— con:
   ausencias realistas
 - notificaciones, 2 conversaciones, 2 alertas históricas, 3 incidencias y
   bitácora de auditoría
+- todas las cuentas con los **términos aceptados**, excepto `tutor11@demo.local`,
+  que se deja pendiente a propósito para poder mostrar la pantalla de aceptación
 
 Todos los nombres, teléfonos, direcciones e identificaciones son **inventados**.
 No se usan fotografías: los avatares se generan a partir de las iniciales, de
@@ -429,7 +601,30 @@ modo que el prototipo no trata imágenes de menores.
 
 ---
 
-## 11. Seguridad aplicada
+### Alta de usuarios
+
+Las cuentas se crean **solo desde el panel de dirección** (permiso
+`MANAGE_USERS`, exclusivo del rol ADMIN). No hay registro autoservicio, y es
+deliberado: en un sistema de seguridad escolar el vínculo entre una persona y un
+menor tiene que verificarlo el centro, no el propio interesado.
+
+- *Padres y tutores* → **Nuevo tutor**
+- *Personal* → **Nueva cuenta de personal**
+
+Al dar de alta un **tutor**, el sistema le genera automáticamente su ficha de
+persona autorizada con un identificador QR correlativo, igual que hace el seed:
+sin ella la pantalla «Mi QR» de la app familiar estaría vacía. Los alumnos se
+vinculan después desde la ficha de cada alumno, en el campo *Tutor principal*.
+
+El permiso se comprueba en el servidor dentro de la propia server action, no
+solo ocultando el botón, y cada alta queda registrada en la bitácora de
+auditoría como `USER_CREATE`.
+
+> ⚠️ **DEMO:** la contraseña inicial la escribe quien da el alta. En producción
+> esto sería una invitación por correo con cambio obligatorio en el primer
+> acceso, sobre un hash bcrypt/argon2 en lugar del SHA-256 del prototipo.
+
+## 12. Seguridad aplicada
 
 Lo que el prototipo **sí** hace bien y conviene conservar al evolucionarlo:
 
@@ -450,6 +645,15 @@ Lo que el prototipo **sí** hace bien y conviene conservar al evolucionarlo:
 - **Auditoría** de inicios de sesión, escaneos (válidos y rechazados),
   movimientos, cambios de autorización, emergencias y exportaciones.
 - **Secretos en variables de entorno**, nunca en el código.
+- **Una sesión por área**, con cookies independientes y un rol admitido por
+  cookie: cerrar la sesión del docente no afecta a la del tutor, y una cookie
+  reutilizada no otorga acceso a otra área.
+- **Consentimiento antes de operar.** Ninguna cuenta puede usar el sistema sin
+  aceptar los términos y el aviso de privacidad, con la versión del documento
+  registrada y auditada.
+- **La cámara y el voceo no salen del dispositivo.** Los fotogramas se analizan
+  localmente y se descartan; la voz la sintetiza el navegador. El voceo nunca
+  anuncia un acceso denegado ni incluye teléfonos o identificadores.
 - **Confirmación explícita** antes de toda acción con consecuencias: entregar a
   un alumno, revocar una autorización, suspender a una persona o activar una
   emergencia.
@@ -457,7 +661,7 @@ Lo que el prototipo **sí** hace bien y conviene conservar al evolucionarlo:
 
 ---
 
-## 12. Limitaciones del prototipo
+## 13. Limitaciones del prototipo
 
 Conviene decirlo con claridad en cualquier presentación:
 
@@ -468,17 +672,24 @@ Conviene decirlo con claridad en cualquier presentación:
 | Intentos de acceso | Sin límite | Rate limiting, bloqueo temporal y 2FA en administración |
 | Base de datos | SQLite local sin cifrado | PostgreSQL gestionado, cifrado en reposo y copias de seguridad |
 | Notificaciones | Guardadas en la BD y mostradas al cargar | Push real (FCM/APNs) y canal en tiempo real |
-| Lectura de QR | API nativa del navegador (no está en todos) | App nativa con lector dedicado |
+| Lectura de QR | API nativa del navegador con respaldo en JS; requiere https o localhost | App nativa con lector dedicado |
 | Códigos QR | Identificador fijo sin caducidad | Códigos rotatorios o de un solo uso |
 | Auditoría | Misma BD, sin IP ni dispositivo | Almacenamiento inmutable, retención definida y alertas |
 | Datos personales | Ficticios | Aviso de privacidad, consentimiento del tutor y derechos ARCO/GDPR |
-| Gestión de usuarios | Se crean con el seed | Altas, bajas y roles desde la interfaz |
+| Términos y privacidad | Texto orientativo no revisado jurídicamente, aceptación con fecha y versión | Redacción legal revisada, copia inmutable del texto aceptado y evidencia del consentimiento |
+| Voceo por voz | Síntesis del navegador en el propio dispositivo | Megafonía integrada o aviso dirigido al aula, con control de volumen por zona |
+| Asistente | Guionizado, catálogo cerrado de respuestas | Si se quisiera conversacional, un modelo con control de qué datos puede ver |
+| Sesiones simultáneas | Una por área y navegador | Sesiones por dispositivo, listado y revocación remota |
+| Gestión de usuarios | Alta desde el panel de dirección | Edición, baja, restablecimiento de contraseña e invitación por correo |
 
 Detalles técnicos menores conocidos:
 
-- El `middleware.ts` solo comprueba la **presencia** de la cookie (corre en el
-  runtime Edge); la verificación real de firma, caducidad y rol la hacen los
-  layouts y las server actions en Node.
+- El `middleware.ts` solo comprueba la **presencia** de la cookie del área
+  (corre en el runtime Edge); la verificación real de firma, caducidad, rol y
+  aceptación de términos la hacen los layouts y las server actions en Node.
+- Dos cuentas **del mismo rol** no pueden coexistir en un mismo navegador: la
+  segunda sustituye a la primera, porque comparten la cookie de su área. Para
+  eso hacen falta dos perfiles de navegador o dos dispositivos.
 - Cuando se solicita un registro que no corresponde al usuario, se muestra
   correctamente la pantalla *«No encontramos esta página»* y **no se filtra
   ningún dato**, pero el código HTTP puede llegar como 200 en lugar de 404
@@ -489,7 +700,7 @@ Detalles técnicos menores conocidos:
 
 ---
 
-## 13. Funciones futuras
+## 14. Funciones futuras
 
 Quedan fuera del alcance a propósito, para no desviar el esfuerzo del objetivo
 de la demostración:
@@ -506,7 +717,7 @@ de la demostración:
 
 ---
 
-## 14. Responsive
+## 15. Responsive
 
 Probado en los tres tamaños de referencia:
 
@@ -523,7 +734,7 @@ mínimos y `prefers-reduced-motion`.
 
 ---
 
-## 15. Créditos
+## 16. Créditos
 
 Prototipo funcional desarrollado como demostración técnica de la propuesta
 académica **SeguriKids**. El nombre del producto es conceptual; los datos, las

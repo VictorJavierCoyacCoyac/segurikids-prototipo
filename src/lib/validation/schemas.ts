@@ -7,6 +7,7 @@ import {
   INCIDENT_SEVERITIES,
   INCIDENT_TYPES,
   RELATIONSHIPS,
+  ROLES,
   STUDENT_STATUSES,
 } from "@/lib/domain";
 
@@ -157,6 +158,50 @@ export const reportFilterSchema = z.object({
   studentId: z.string().trim().optional(),
   type: z.string().trim().optional(),
 });
+
+/**
+ * Alta de usuarios del sistema (solo dirección).
+ *
+ * La contraseña inicial la define quien da el alta.
+ * ⚠️ DEMO: en producción esto sería una invitación por correo con cambio
+ * obligatorio en el primer acceso, nunca una contraseña escrita por un tercero.
+ */
+export const userSchema = z
+  .object({
+    name: requiredText("El nombre completo", 90),
+    email: z
+      .string({ required_error: "El correo es obligatorio." })
+      .trim()
+      .toLowerCase()
+      .email("Introduce un correo con formato válido."),
+    password: z
+      .string({ required_error: "La contraseña es obligatoria." })
+      .min(8, "La contraseña debe tener al menos 8 caracteres.")
+      .max(72, "La contraseña no puede superar 72 caracteres."),
+    role: z.enum(ROLES, { required_error: "Selecciona un rol." }),
+    phone,
+    jobTitle: optionalText(80),
+    /** Relación con el menor: solo aplica al rol PARENT. */
+    relationship: z.enum(RELATIONSHIPS).optional(),
+  })
+  .superRefine((data, ctx) => {
+    // El cargo describe a quien trabaja en el centro; un tutor no tiene cargo.
+    if (data.role !== "PARENT" && !data.jobTitle) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["jobTitle"],
+        message: "Indica el cargo dentro del centro.",
+      });
+    }
+    if (data.role === "PARENT" && !data.relationship) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["relationship"],
+        message: "Indica la relación con el menor para generar su credencial.",
+      });
+    }
+  });
+export type UserInput = z.infer<typeof userSchema>;
 
 /** Convierte los errores de Zod en un mapa campo → primer mensaje. */
 export function fieldErrors(error: z.ZodError): Record<string, string> {

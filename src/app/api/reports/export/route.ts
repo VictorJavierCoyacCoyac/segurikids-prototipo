@@ -12,9 +12,15 @@ import { getMovementsCsvRows } from "@/server/services/reports";
  * datos que muestra el reporte en pantalla, aplicando los filtros recibidos.
  * La exportación queda registrada en la auditoría porque implica extraer datos
  * del centro.
+ *
+ * La sesión se resuelve en el área `admin` de forma EXPLÍCITA. Las rutas de
+ * `/api` no tienen área propia, y con varias sesiones abiertas en el navegador
+ * (tutor, docente y dirección) se elegiría la primera que existiera, que
+ * podría no ser la de dirección y haría fallar la descarga. Exportar reportes
+ * es competencia exclusiva de dirección, así que esa es la sesión a usar.
  */
 export async function GET(request: Request) {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser("admin");
   if (!user) return new Response("No autorizado", { status: 401 });
   if (!can(user.role, "VIEW_REPORTS")) {
     return new Response("Acceso denegado", { status: 403 });

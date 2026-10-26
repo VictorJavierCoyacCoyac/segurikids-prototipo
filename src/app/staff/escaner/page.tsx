@@ -50,9 +50,10 @@ export default async function ScannerPage() {
 
       <p className="mt-5 flex items-start gap-2 px-1 text-xs leading-relaxed text-ink-400">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        Prototipo: la lectura por cámara usa la API nativa del navegador y puede no estar disponible
-        en todos los dispositivos. La entrada manual y la simulación ejecutan la misma validación en
-        el servidor, por lo que la demostración es siempre reproducible.
+        La cámara usa el lector nativo del navegador y, donde no existe, un decodificador compatible
+        que se carga solo en ese caso. Requiere conexión segura (https) o localhost: por IP local el
+        navegador no concede la cámara. La entrada manual y la simulación ejecutan la misma
+        validación en el servidor, por lo que la demostración es siempre reproducible.
       </p>
     </div>
   );

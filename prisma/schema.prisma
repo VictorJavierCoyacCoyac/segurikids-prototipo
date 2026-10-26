@@ -58,6 +58,12 @@ model User {
   avatarTone   String   @default("brand") // color del avatar generado
   active       Boolean  @default(true)
   lastLoginAt  DateTime?
+  /// Momento en que la cuenta aceptó los términos y el aviso de privacidad.
+  /// Nulo = pendiente: la cuenta no puede operar hasta aceptarlos.
+  termsAcceptedAt DateTime?
+  /// Versión aceptada (`src/lib/domain/terms.ts`). Si cambia la versión
+  /// vigente, la aceptación caduca y se vuelve a pedir.
+  termsVersion    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

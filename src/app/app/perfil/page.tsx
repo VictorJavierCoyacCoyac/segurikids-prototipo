@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   CalendarClock,
   ChevronRight,
+  FileText,
   LogOut,
   Mail,
   MessageSquare,
@@ -20,6 +21,8 @@ import { PageHeader, SectionCard } from "@/components/ui/card";
 import { Alert } from "@/components/ui/feedback";
 import { requireRole } from "@/lib/auth/session";
 import { ROLE_LABEL } from "@/lib/domain/roles";
+import { TERMS_VERSION } from "@/lib/domain/terms";
+import { formatDateTime } from "@/lib/utils/date";
 import { prisma } from "@/lib/db";
 import { getOwnPersonProfile } from "@/server/services/authorizations";
 import { listChildren } from "@/server/services/students";
@@ -51,6 +54,12 @@ const LINKS = [
     label: "Mi código QR",
     hint: "Identificación para la recogida",
     icon: QrCode,
+  },
+  {
+    href: "/terminos",
+    label: "Términos y aviso de privacidad",
+    hint: "Condiciones de uso y tratamiento de datos",
+    icon: FileText,
   },
 ];
 
@@ -102,6 +111,13 @@ export default async function ParentProfilePage() {
                   },
                 ]
               : []),
+            {
+              icon: FileText,
+              label: `Términos aceptados (v${TERMS_VERSION})`,
+              value: user.termsAcceptedAt
+                ? formatDateTime(user.termsAcceptedAt)
+                : "Pendiente de aceptación",
+            },
           ].map((row) => (
             <li key={row.label} className="flex items-center gap-3 px-5 py-3">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-ink-100 text-ink-500">

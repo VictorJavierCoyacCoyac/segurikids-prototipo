@@ -1,24 +1,52 @@
 "use client";
 
-import { Camera, CameraOff, Loader2 } from "lucide-react";
+import { Camera, CameraOff, Loader2, Lock, SwitchCamera } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { QR_PATTERN } from "@/lib/validation/schemas";
 
 /**
- * Lector de QR por cámara usando la API nativa `BarcodeDetector`.
+ * Lector de QR por cámara para el dispositivo del personal.
  *
- * DECISIÓN TÉCNICA: se evita una librería externa de escaneo para mantener el
- * prototipo ligero. La API está disponible en Chrome/Edge y en Android; cuando
- * no existe, el componente lo indica y el operador usa la entrada manual o la
- * simulación, que ejecutan exactamente el mismo flujo de validación.
+ * DOS MOTORES DE DECODIFICACIÓN:
+ *   1. `BarcodeDetector`, la API nativa del navegador (Chrome/Edge y Android).
+ *      Es la vía rápida: decodifica en el proceso del navegador.
+ *   2. `jsqr`, decodificador en JavaScript que se carga SOLO si la API nativa
+ *      no existe. Cubre iOS/Safari y Firefox, donde `BarcodeDetector` no está
+ *      disponible y el escáner quedaría inservible en el móvil del docente.
+ *
+ * El respaldo se importa de forma dinámica para no cargar 250 kB de
+ * decodificador en los navegadores que no lo necesitan.
+ *
+ * CONTEXTO SEGURO: `getUserMedia` solo existe en https o en localhost. En un
+ * teléfono conectado por IP local (http://192.168.x.x) el navegador no concede
+ * la cámara, y el fallo es silencioso si no se avisa. Por eso se detecta antes
+ * de pedir permiso y se explica qué hacer.
+ *
+ * PRIVACIDAD: los fotogramas se procesan en el dispositivo para localizar el
+ * código y se descartan. No se graba ni se envía imagen a ningún servidor.
  */
+
 type DetectorLike = {
   detect: (source: CanvasImageSource) => Promise<Array<{ rawValue: string }>>;
 };
 
-type Status = "idle" | "starting" | "scanning" | "unsupported" | "denied" | "error";
+type JsQrFn = (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  options?: { inversionAttempts?: "dontInvert" | "attemptBoth" },
+) => { data: string } | null;
+
+type Status = "idle" | "starting" | "scanning" | "insecure" | "unsupported" | "denied" | "error";
+
+type Engine = "native" | "jsqr";
+
+/** Intervalo del bucle del respaldo en JS: suficiente para leer sin saturar el móvil. */
+const JSQR_INTERVAL_MS = 120;
+/** Lado máximo del fotograma que se analiza (reduce el coste por intento). */
+const JSQR_MAX_SIDE = 480;
 
 export function CameraReader({
   onDetected,
@@ -28,31 +56,63 @@ export function CameraReader({
   disabled?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lockedRef = useRef(false);
+  const jsQrRef = useRef<JsQrFn | null>(null);
+
   const [status, setStatus] = useState<Status>("idle");
+  const [engine, setEngine] = useState<Engine | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
+  // Reinicio solicitado al cambiar de cámara: la bandera evita que el efecto
+  // vuelva a arrancar el vídeo por un simple cambio de identidad de `start`.
+  const restartRef = useRef(false);
+  const [restartToken, setRestartToken] = useState(0);
 
   const stop = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    setStatus("idle");
+    setStatus((current) => (current === "scanning" || current === "starting" ? "idle" : current));
   }, []);
 
-  const start = useCallback(async () => {
-    const detectorCtor = (
-      window as unknown as { BarcodeDetector?: new (options?: { formats: string[] }) => DetectorLike }
-    ).BarcodeDetector;
+  /** Acepta el primer código con el formato del centro y bloquea el bucle. */
+  const accept = useCallback(
+    (raw: string | null | undefined): boolean => {
+      const value = (raw ?? "").trim().toUpperCase();
+      if (!QR_PATTERN.test(value)) return false;
+      lockedRef.current = true;
+      onDetected(value);
+      stop();
+      return true;
+    },
+    [onDetected, stop],
+  );
 
-    if (!detectorCtor) {
+  const start = useCallback(async () => {
+    // 1. ¿Se puede usar la cámara en este origen?
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setStatus("insecure");
+      setMessage(
+        "El navegador solo concede la cámara en conexiones seguras (https) o en localhost. Abre el prototipo por su enlace https —el túnel público— o usa la entrada manual.",
+      );
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
       setStatus("unsupported");
       setMessage(
-        "Este navegador no permite leer códigos con la cámara. Usa la entrada manual o «Simular escaneo».",
+        "Este navegador no expone la cámara a la aplicación. Usa la entrada manual o «Simular escaneo».",
       );
       return;
     }
@@ -61,59 +121,145 @@ export function CameraReader({
     setMessage(null);
     lockedRef.current = false;
 
+    // 2. Motor de decodificación: nativo si existe, respaldo en JS si no.
+    const detectorCtor = (
+      window as unknown as {
+        BarcodeDetector?: new (options?: { formats: string[] }) => DetectorLike;
+      }
+    ).BarcodeDetector;
+
+    let detector: DetectorLike | null = null;
+    let selected: Engine = "native";
+
+    if (detectorCtor) {
+      try {
+        detector = new detectorCtor({ formats: ["qr_code"] });
+      } catch {
+        detector = null;
+      }
+    }
+
+    if (!detector) {
+      selected = "jsqr";
+      if (!jsQrRef.current) {
+        try {
+          const imported = (await import("jsqr")) as unknown as { default?: JsQrFn };
+          jsQrRef.current = (imported.default ?? (imported as unknown as JsQrFn)) || null;
+        } catch {
+          setStatus("unsupported");
+          setMessage(
+            "No se pudo cargar el decodificador de códigos. Usa la entrada manual o «Simular escaneo».",
+          );
+          return;
+        }
+      }
+      if (!jsQrRef.current) {
+        setStatus("unsupported");
+        setMessage("No hay ningún decodificador disponible en este navegador.");
+        return;
+      }
+    }
+
+    setEngine(selected);
+
+    // 3. Cámara.
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: facingMode } },
         audio: false,
       });
       streamRef.current = stream;
 
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       video.srcObject = stream;
       await video.play();
-
-      const detector = new detectorCtor({ formats: ["qr_code"] });
       setStatus("scanning");
 
-      const tick = async () => {
-        if (!videoRef.current || lockedRef.current) return;
-        try {
-          const found = await detector.detect(videoRef.current);
-          const match = found
-            .map((item) => item.rawValue.trim().toUpperCase())
-            .find((value) => QR_PATTERN.test(value));
-
-          if (match) {
-            // Bloquea lecturas repetidas del mismo código mientras se valida.
-            lockedRef.current = true;
-            onDetected(match);
-            stop();
-            return;
+      if (detector) {
+        const nativeTick = async () => {
+          const current = videoRef.current;
+          if (!current || lockedRef.current) return;
+          try {
+            const found = await detector.detect(current);
+            for (const item of found) {
+              if (accept(item.rawValue)) return;
+            }
+          } catch {
+            // Un fotograma ilegible no debe detener el bucle de escaneo.
           }
-        } catch {
-          // Un fotograma ilegible no debe detener el bucle de escaneo.
+          rafRef.current = requestAnimationFrame(() => void nativeTick());
+        };
+        rafRef.current = requestAnimationFrame(() => void nativeTick());
+        return;
+      }
+
+      // Respaldo: se muestrea el vídeo en un canvas y se decodifica en JS.
+      const decode = jsQrRef.current!;
+      if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
+      const canvas = canvasRef.current;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+
+      const jsTick = () => {
+        const current = videoRef.current;
+        if (!current || !context || lockedRef.current) return;
+
+        const width = current.videoWidth;
+        const height = current.videoHeight;
+        if (width > 0 && height > 0) {
+          const scale = Math.min(1, JSQR_MAX_SIDE / Math.max(width, height));
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          context.drawImage(current, 0, 0, canvas.width, canvas.height);
+
+          try {
+            const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+            const found = decode(frame.data, canvas.width, canvas.height, {
+              inversionAttempts: "dontInvert",
+            });
+            if (found && accept(found.data)) return;
+          } catch {
+            // Igual que arriba: se intenta con el siguiente fotograma.
+          }
         }
-        rafRef.current = requestAnimationFrame(() => void tick());
+
+        timerRef.current = setTimeout(jsTick, JSQR_INTERVAL_MS);
       };
 
-      rafRef.current = requestAnimationFrame(() => void tick());
+      timerRef.current = setTimeout(jsTick, JSQR_INTERVAL_MS);
     } catch (error) {
       const name = error instanceof Error ? error.name : "";
       if (name === "NotAllowedError" || name === "SecurityError") {
         setStatus("denied");
-        setMessage("No se concedió permiso para usar la cámara.");
+        setMessage(
+          "No se concedió permiso para usar la cámara. Revisa los permisos del sitio en el navegador y vuelve a intentarlo.",
+        );
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        setStatus("error");
+        setMessage("No se encontró ninguna cámara disponible en este dispositivo.");
       } else {
         setStatus("error");
         setMessage("No fue posible iniciar la cámara en este dispositivo.");
       }
     }
-  }, [onDetected, stop]);
+  }, [accept, facingMode]);
 
   // Liberar la cámara al desmontar: nunca debe quedar activa en segundo plano.
   useEffect(() => stop, [stop]);
 
+  // Reapertura con la otra cámara (frontal/trasera) tras detener la actual.
+  useEffect(() => {
+    if (!restartRef.current) return;
+    restartRef.current = false;
+    void start();
+  }, [restartToken, start]);
+
   const active = status === "scanning" || status === "starting";
+  const failed =
+    status === "insecure" || status === "unsupported" || status === "denied" || status === "error";
 
   return (
     <div>
@@ -146,18 +292,24 @@ export function CameraReader({
           <div className="absolute inset-0 grid place-items-center p-6 text-center">
             <div>
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white/10 text-white">
-                {status === "unsupported" || status === "denied" || status === "error" ? (
+                {status === "insecure" ? (
+                  <Lock className="h-7 w-7" />
+                ) : failed ? (
                   <CameraOff className="h-7 w-7" />
                 ) : (
                   <Camera className="h-7 w-7" />
                 )}
               </span>
               <p className="mt-3 text-sm font-semibold text-white">
-                {status === "idle" ? "Cámara lista" : "Cámara no disponible"}
+                {status === "idle"
+                  ? "Cámara lista"
+                  : status === "insecure"
+                    ? "Se requiere conexión segura"
+                    : "Cámara no disponible"}
               </p>
               <p className="mx-auto mt-1 max-w-xs text-xs leading-snug text-white/70">
                 {message ??
-                  "Activa la cámara para leer el código QR de la persona que llega a recoger."}
+                  "Activa la cámara y apúntala al código QR que el tutor muestra en su teléfono."}
               </p>
             </div>
           </div>
@@ -171,14 +323,39 @@ export function CameraReader({
             </span>
           </div>
         ) : null}
+
+        {status === "scanning" ? (
+          <div className="absolute inset-x-0 bottom-3 flex justify-center">
+            <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white/90">
+              Buscando código ·{" "}
+              {engine === "native" ? "lector del navegador" : "lector compatible (jsQR)"}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {active ? (
-          <Button type="button" variant="outline" size="md" onClick={stop}>
-            <CameraOff className="h-4 w-4" />
-            Detener cámara
-          </Button>
+          <>
+            <Button type="button" variant="outline" size="md" onClick={stop}>
+              <CameraOff className="h-4 w-4" />
+              Detener cámara
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              onClick={() => {
+                stop();
+                setFacingMode((current) => (current === "environment" ? "user" : "environment"));
+                restartRef.current = true;
+                setRestartToken((value) => value + 1);
+              }}
+            >
+              <SwitchCamera className="h-4 w-4" />
+              Cambiar cámara
+            </Button>
+          </>
         ) : (
           <Button
             type="button"
@@ -188,12 +365,12 @@ export function CameraReader({
             disabled={disabled || status === "unsupported"}
           >
             <Camera className="h-4 w-4" />
-            Activar cámara
+            {failed ? "Reintentar cámara" : "Activar cámara"}
           </Button>
         )}
         <p className="flex-1 self-center text-xs leading-snug text-ink-500">
-          ¿Sin cámara? Escribe el código manualmente o usa «Simular escaneo»: el flujo de validación
-          es idéntico.
+          Los fotogramas se analizan en este dispositivo y se descartan: no se graba ni se envía
+          imagen. ¿Sin cámara? Escribe el código o usa «Simular escaneo»: la validación es idéntica.
         </p>
       </div>
     </div>

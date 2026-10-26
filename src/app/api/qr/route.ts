@@ -12,7 +12,8 @@ import { QR_PATTERN } from "@/lib/validation/schemas";
  * una referencia que el sistema debe resolver contra la base de datos.
  *
  * Requiere sesión: aunque el contenido no sea sensible, el endpoint no queda
- * abierto a Internet.
+ * abierto a Internet. Vale cualquiera de las sesiones abiertas (la credencial
+ * la consultan tanto el tutor como dirección), por lo que no se fija un área.
  */
 export async function GET(request: Request) {
   const user = await getCurrentUser();

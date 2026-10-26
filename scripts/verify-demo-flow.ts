@@ -15,7 +15,10 @@ import { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../src/lib/db";
 import { can } from "../src/lib/auth/permissions";
+import { AREA_BY_ROLE, cookieName } from "../src/lib/auth/session";
 import { verifyPassword } from "../src/lib/auth/password";
+import { assistantReply, buildAnnouncement } from "../src/lib/domain/announcements";
+import { TERMS_VERSION } from "../src/lib/domain/terms";
 import {
   listStudentMovements,
   registerMovement,
@@ -363,6 +366,127 @@ async function main() {
   check(
     "la salida registrada en el paso 1 aparece en el reporte",
     report.totals.exits >= 1,
+  );
+
+  // ── 8 · Sesiones simultáneas por área ─────────────────────────────────────
+  section("8 · Sesiones simultáneas por área");
+
+  check(
+    "el tutor usa la cookie del área familiar",
+    cookieName(AREA_BY_ROLE.PARENT) === "sk_session_app",
+    cookieName(AREA_BY_ROLE.PARENT),
+  );
+  check(
+    "el personal usa la cookie del área de personal",
+    cookieName(AREA_BY_ROLE.STAFF) === "sk_session_staff",
+    cookieName(AREA_BY_ROLE.STAFF),
+  );
+  check(
+    "dirección usa la cookie del área administrativa",
+    cookieName(AREA_BY_ROLE.ADMIN) === "sk_session_admin",
+    cookieName(AREA_BY_ROLE.ADMIN),
+  );
+  check(
+    "las tres áreas usan cookies distintas (tutor y docente pueden coexistir)",
+    new Set(Object.values(AREA_BY_ROLE).map(cookieName)).size === 3,
+  );
+
+  // ── 9 · Términos y aviso de privacidad ────────────────────────────────────
+  section("9 · Términos y aviso de privacidad");
+
+  const pendingAccount = await db.user.findUniqueOrThrow({
+    where: { email: "tutor11@demo.local" },
+  });
+  check(
+    "la cuenta de ejemplo queda pendiente de aceptar los términos",
+    pendingAccount.termsAcceptedAt === null && pendingAccount.termsVersion === null,
+  );
+  check(
+    "las cuentas destacadas de la demostración ya los aceptaron",
+    parent.termsVersion === TERMS_VERSION &&
+      staff.termsVersion === TERMS_VERSION &&
+      admin.termsVersion === TERMS_VERSION,
+  );
+
+  await db.user.update({
+    where: { id: pendingAccount.id },
+    data: { termsAcceptedAt: new Date(), termsVersion: TERMS_VERSION },
+  });
+  const accepted = await db.user.findUniqueOrThrow({ where: { id: pendingAccount.id } });
+  check(
+    "al aceptar se guarda la versión del documento, no solo un booleano",
+    accepted.termsVersion === TERMS_VERSION && accepted.termsAcceptedAt !== null,
+  );
+
+  // Una versión nueva del texto invalida la aceptación anterior.
+  await db.user.update({
+    where: { id: pendingAccount.id },
+    data: { termsVersion: "0000.00" },
+  });
+  const stale = await db.user.findUniqueOrThrow({ where: { id: pendingAccount.id } });
+  check(
+    "una aceptación de otra versión no se da por válida",
+    stale.termsVersion !== TERMS_VERSION,
+  );
+
+  // ── 10 · Voceo y asistente ────────────────────────────────────────────────
+  section("10 · Voceo y asistente de recogida");
+
+  const announcement = buildAnnouncement({
+    students: [{ name: "Mateo Rivas", group: "Kínder A" }],
+    personName: "Carmen Martínez",
+    relationship: "MOTHER",
+  });
+  check("el voceo nombra al alumno", announcement.includes("Mateo Rivas"));
+  check("el voceo nombra el grupo", announcement.includes("Kínder A"));
+  check("el voceo nombra a quien lo espera", announcement.includes("Carmen Martínez"));
+  check(
+    "el voceo no incluye el identificador QR",
+    !announcement.includes("SK-DEMO"),
+    announcement,
+  );
+
+  const twoStudents = buildAnnouncement({
+    students: [
+      { name: "Mateo Rivas", group: "Kínder A" },
+      { name: "Sofía Rivas", group: "Maternal" },
+    ],
+    personName: "Javier Hernández",
+  });
+  check("con dos alumnos se vocean ambos nombres", twoStudents.includes("Mateo Rivas y Sofía Rivas"));
+  check("sin alumnos no se genera voceo", buildAnnouncement({ students: [], personName: "X" }) === "");
+
+  const current = await getDashboardSnapshot(school.id);
+  const assistantContext = {
+    inCampus: current.inCampus,
+    offCampus: current.offCampus,
+    absent: current.absent,
+    pending: current.pending,
+    entriesToday: current.entriesToday,
+    exitsToday: current.exitsToday,
+    activeAlerts: current.activeAlerts,
+    schoolName: school.name,
+  };
+  check(
+    "el asistente cita el número de alumnos en el plantel",
+    assistantReply("¿cuántos alumnos siguen en el plantel?", assistantContext).text.includes(
+      `${current.inCampus}`,
+    ),
+  );
+  check(
+    "el asistente explica el requisito de https para la cámara",
+    assistantReply("la cámara no enciende", assistantContext).text.includes("https"),
+  );
+  check(
+    "«vocea:» devuelve el texto que debe reproducirse",
+    assistantReply("vocea: ya pueden pasar por Kínder A", assistantContext).speak ===
+      "ya pueden pasar por Kínder A",
+  );
+  check(
+    "una pregunta fuera del guion se responde sin inventar",
+    assistantReply("cuál es la capital de Francia", assistantContext).text.includes(
+      "No tengo una respuesta guionizada",
+    ),
   );
 
   // ── Resumen ───────────────────────────────────────────────────────────────

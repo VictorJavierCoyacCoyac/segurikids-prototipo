@@ -8,17 +8,18 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
+import Link from "next/link";
 
 import { DemoBadge, Logo } from "@/components/layout/brand";
 import { Avatar } from "@/components/ui/avatar";
 import { Alert } from "@/components/ui/feedback";
-import { getCurrentUser } from "@/lib/auth/session";
-import { ROLE_DESCRIPTION, ROLE_HOME, ROLE_LABEL, type Role } from "@/lib/domain/roles";
+import { AREA_LABEL, isSessionArea, listSessions } from "@/lib/auth/session";
+import { ROLE_DESCRIPTION, ROLE_LABEL, type Role } from "@/lib/domain/roles";
 import { listDemoAccounts } from "@/server/services/users";
 import { demoLoginAction } from "@/server/actions/auth";
 
 import { LoginForm } from "./login-form";
+import { OpenSessions } from "./open-sessions";
 
 export const metadata: Metadata = { title: "Acceso" };
 
@@ -26,11 +27,21 @@ const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 /** Contraseña compartida por las cuentas de demostración (definida en el seed). */
 const DEMO_PASSWORD = "demo1234";
 
-export default async function LoginPage() {
-  const current = await getCurrentUser();
-  if (current) redirect(ROLE_HOME[current.role]);
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const rawArea = Array.isArray(params.area) ? params.area[0] : params.area;
+  const requestedArea = isSessionArea(rawArea) ? rawArea : undefined;
 
-  const demoAccounts = DEMO_MODE ? await listDemoAccounts() : [];
+  // No se expulsa a quien ya tiene sesión: se listan las abiertas y se permite
+  // añadir otra cuenta, que es lo que hace posible el uso en dos pestañas.
+  const [sessions, demoAccounts] = await Promise.all([
+    listSessions(),
+    DEMO_MODE ? listDemoAccounts() : Promise.resolve([]),
+  ]);
 
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
@@ -95,6 +106,18 @@ export default async function LoginPage() {
               Accede con tu cuenta para continuar al panel que corresponde a tu rol.
             </p>
           </header>
+
+          {requestedArea && sessions.every((session) => session.area !== requestedArea) ? (
+            <Alert tone="info" className="mb-5">
+              <p className="font-semibold">Se necesita una sesión de {AREA_LABEL[requestedArea]}</p>
+              <p className="mt-0.5 leading-relaxed">
+                Esa área mantiene su propia sesión. Entra con la cuenta correspondiente para
+                continuar; las demás sesiones abiertas no se cierran.
+              </p>
+            </Alert>
+          ) : null}
+
+          <OpenSessions sessions={sessions} requestedArea={requestedArea} />
 
           <LoginForm />
 
@@ -162,10 +185,13 @@ export default async function LoginPage() {
                   Sugerencia para la demostración
                 </p>
                 <p className="mt-1.5 text-xs leading-relaxed text-ink-600">
-                  Entra primero como <strong>Padre / Tutor</strong> y abre «Mi QR». Después accede
-                  como <strong>Personal escolar</strong> y usa el escáner (o «Simular escaneo») con el
-                  código <code className="font-mono font-semibold">SK-DEMO-000101</code> para
-                  completar una entrega real de principio a fin.
+                  Cada área mantiene su propia sesión, así que puedes usar{" "}
+                  <strong>dos pestañas o dos dispositivos a la vez</strong>: en una, entra como{" "}
+                  <strong>Padre / Tutor</strong> y abre «Mi QR» a pantalla completa; en la otra, entra
+                  como <strong>Personal escolar</strong> y escanéalo con la cámara. Al validarse, el
+                  sistema vocea el nombre del alumno y registra la salida. Sin cámara, usa «Simular
+                  escaneo» con el código{" "}
+                  <code className="font-mono font-semibold">SK-DEMO-000101</code>.
                 </p>
               </div>
             </>
@@ -185,6 +211,14 @@ export default async function LoginPage() {
           <p className="mt-8 text-center text-xs leading-relaxed text-ink-400">
             SeguriKids · Prototipo funcional para presentación académica. La autenticación, el cifrado
             y el tratamiento de datos personales deben endurecerse antes de cualquier uso real.
+          </p>
+          <p className="mt-3 text-center text-xs text-ink-400">
+            <Link
+              href="/terminos"
+              className="font-semibold text-ink-500 underline underline-offset-2 transition hover:text-brand-600"
+            >
+              Términos de uso y aviso de privacidad
+            </Link>
           </p>
         </div>
       </section>

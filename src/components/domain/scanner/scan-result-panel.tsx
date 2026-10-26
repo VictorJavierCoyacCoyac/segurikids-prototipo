@@ -14,11 +14,13 @@ import { useActionState } from "react";
 
 import { ReportIncidentButton } from "@/components/domain/incident-form";
 import { StudentStatusPill } from "@/components/domain/status-pill";
+import { Announcer } from "@/components/domain/voice/announcer";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/feedback";
 import { CheckCard } from "@/components/ui/field";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { buildAnnouncement } from "@/lib/domain/announcements";
 import { VALIDATION_FAILURE_MESSAGE, type ValidationFailure } from "@/lib/domain/attendance";
 import { relationshipLabel } from "@/lib/domain/roles";
 import { confirmPickupAction } from "@/server/actions/attendance";
@@ -65,6 +67,17 @@ function AuthorizedPanel({
 }) {
   const [state, formAction] = useActionState(confirmPickupAction, idleState<MovementResult>());
 
+  // Voceo: avisa al aula de que ya han llegado por el alumno. Solo en el caso
+  // autorizado; un intento bloqueado nunca se anuncia en voz alta.
+  const announcement = buildAnnouncement({
+    students: result.deliverable.map((student) => ({
+      name: student.name,
+      group: student.group,
+    })),
+    personName: result.person.name,
+    relationship: result.person.relationship,
+  });
+
   // Entrega completada: se muestra el comprobante en lugar del formulario.
   if (state.ok && state.data?.ok) {
     return (
@@ -96,6 +109,9 @@ function AuthorizedPanel({
           </div>
         </div>
       </div>
+
+      {/* Voceo automático de la llegada */}
+      <Announcer text={announcement} />
 
       {/* Identidad de la persona */}
       <div className="sk-card p-4">

@@ -8,6 +8,8 @@ import type { Role } from "@/lib/domain/roles";
 export const PERMISSIONS = {
   /** Registrar entradas y salidas, y usar el escáner. */
   ACCESS_CONTROL: ["ADMIN", "STAFF"],
+  /** Dar de alta cuentas de usuario del centro. */
+  MANAGE_USERS: ["ADMIN"],
   /** Crear o editar alumnos. */
   MANAGE_STUDENTS: ["ADMIN"],
   /** Crear o editar personas autorizadas de cualquier alumno. */

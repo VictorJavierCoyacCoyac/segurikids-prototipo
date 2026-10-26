@@ -15,6 +15,7 @@
 import { PrismaClient } from "@prisma/client";
 
 import { hashPassword } from "../src/lib/auth/password";
+import { TERMS_VERSION } from "../src/lib/domain/terms";
 
 const prisma = new PrismaClient();
 
@@ -68,6 +69,13 @@ function latencyMinutes(timestamp: Date): number {
 // ── Escenario ────────────────────────────────────────────────────────────────
 
 const DEMO_PASSWORD = "demo1234";
+
+/**
+ * Cuenta que se deja SIN aceptar los términos, para poder demostrar la puerta
+ * de aceptación en el primer acceso. Es un tutor secundario, nunca una de las
+ * tres cuentas destacadas del selector de acceso.
+ */
+const PENDING_TERMS_EMAIL = "tutor11@demo.local";
 
 /** Tutores (rol PARENT). El primero es la cuenta demo principal. */
 const TUTORS = [
@@ -915,6 +923,16 @@ async function main() {
   await prisma.user.updateMany({
     where: { email: { in: ["admin@demo.local", "docente@demo.local", "padre@demo.local"] } },
     data: { lastLoginAt: at(today, 7, 30) },
+  });
+
+  // ── Aceptación de términos ────────────────────────────────────────────────
+  // Las cuentas sembradas se dan por aceptadas para que la demostración entre
+  // directa al panel. Se deja UNA cuenta pendiente a propósito
+  // (PENDING_TERMS_EMAIL) para poder mostrar la pantalla de aceptación sin
+  // tener que dar de alta un usuario nuevo.
+  await prisma.user.updateMany({
+    where: { email: { not: PENDING_TERMS_EMAIL } },
+    data: { termsAcceptedAt: at(today, 7, 0), termsVersion: TERMS_VERSION },
   });
 
   // ── Resumen ───────────────────────────────────────────────────────────────

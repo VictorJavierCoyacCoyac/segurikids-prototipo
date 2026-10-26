@@ -1,6 +1,7 @@
 import { ShieldCheck, Users } from "lucide-react";
 import type { Metadata } from "next";
 
+import { CreateUserButton } from "@/components/domain/user-form";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, SectionCard } from "@/components/ui/card";
@@ -8,6 +9,7 @@ import { Alert } from "@/components/ui/feedback";
 import { requireRole } from "@/lib/auth/session";
 import { PERMISSIONS, type Permission } from "@/lib/auth/permissions";
 import { ROLE_DESCRIPTION, ROLE_LABEL, type Role } from "@/lib/domain/roles";
+import { TERMS_VERSION } from "@/lib/domain/terms";
 import { formatDate } from "@/lib/utils/date";
 import { maskPhone } from "@/lib/utils/format";
 import { listStaff } from "@/server/services/users";
@@ -21,6 +23,7 @@ export default async function AdminStaffPage() {
 
   const permissionLabels: Record<Permission, string> = {
     ACCESS_CONTROL: "Registrar entradas y salidas",
+    MANAGE_USERS: "Dar de alta usuarios",
     MANAGE_STUDENTS: "Gestionar alumnos",
     MANAGE_ALL_AUTHORIZATIONS: "Gestionar todas las autorizaciones",
     MANAGE_OWN_AUTHORIZATIONS: "Gestionar autorizaciones propias",
@@ -37,6 +40,7 @@ export default async function AdminStaffPage() {
       <PageHeader
         title="Personal"
         description="Cuentas del centro con acceso al control de acceso y a la administración."
+        action={<CreateUserButton defaultRole="STAFF" label="Nueva cuenta de personal" />}
       />
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -66,6 +70,11 @@ export default async function AdminStaffPage() {
                     >
                       {ROLE_LABEL[member.role as Role]}
                     </Badge>
+                    {member.termsVersion !== TERMS_VERSION ? (
+                      <Badge className="bg-sun-50 text-sun-700 ring-sun-200" size="sm">
+                        Términos pendientes
+                      </Badge>
+                    ) : null}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-ink-500">
                     {member.jobTitle ?? "Sin cargo asignado"} · {member.email} ·{" "}
@@ -120,9 +129,9 @@ export default async function AdminStaffPage() {
       <Alert tone="warning" className="mt-4">
         <p className="font-semibold">Alcance del prototipo</p>
         <p className="mt-0.5 leading-relaxed">
-          El alta de personal, la asignación de roles y el restablecimiento de contraseñas se
-          realizan mediante el seed de datos. En producción esta pantalla incluiría gestión completa
-          de usuarios con doble factor para las cuentas administrativas.
+          El alta de cuentas se hace desde esta pantalla y queda auditada. Siguen fuera del alcance
+          la edición y baja de usuarios, el restablecimiento de contraseñas y el doble factor para
+          cuentas administrativas, que serían imprescindibles antes de un uso real.
         </p>
       </Alert>
     </div>

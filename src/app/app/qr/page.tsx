@@ -2,6 +2,7 @@ import { BadgeCheck, Info, QrCode, ShieldCheck, Sparkles } from "lucide-react";
 import type { Metadata } from "next";
 
 import { QrCard } from "@/components/domain/qr-card";
+import { QrPresenter } from "@/components/domain/qr-present";
 import { StudentStatusPill } from "@/components/domain/status-pill";
 import { ButtonLink } from "@/components/ui/button";
 import { PageHeader, SectionCard } from "@/components/ui/card";
@@ -52,6 +53,14 @@ export default async function ParentQrPage() {
         size={260}
         className="mx-auto max-w-sm animate-scale-in"
       />
+
+      <div className="flex justify-center">
+        <QrPresenter
+          code={profile.qrIdentifier}
+          name={profile.name}
+          subtitle={`${relationshipLabel(profile.relationship)} · ${user.schoolName}`}
+        />
+      </div>
 
       {/* Alumnos que este código permite recoger ahora mismo */}
       <SectionCard
@@ -108,7 +117,7 @@ export default async function ParentQrPage() {
           {[
             {
               title: "Muestra el código",
-              text: "El personal escanea tu QR desde su dispositivo de control de acceso.",
+              text: "Pulsa «Mostrar a pantalla completa» y acerca tu teléfono a la cámara del personal.",
             },
             {
               title: "El sistema valida tu autorización",
@@ -116,7 +125,7 @@ export default async function ParentQrPage() {
             },
             {
               title: "Se confirma la entrega",
-              text: "Queda registrada la salida con fecha, hora y responsable, y recibes el aviso.",
+              text: "El sistema vocea el nombre de tu hijo para avisar al aula, registra la salida con fecha, hora y responsable, y te envía el aviso.",
             },
           ].map((step, index) => (
             <li key={step.title} className="flex gap-3">

@@ -4,12 +4,14 @@ import Link from "next/link";
 
 import { FilterBar, FilterField } from "@/components/domain/filter-bar";
 import { StudentStatusPill } from "@/components/domain/status-pill";
+import { CreateUserButton } from "@/components/domain/user-form";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, SectionCard } from "@/components/ui/card";
 import { Input } from "@/components/ui/field";
 import { Alert, EmptyState } from "@/components/ui/feedback";
 import { requireRole } from "@/lib/auth/session";
+import { TERMS_VERSION } from "@/lib/domain/terms";
 import { maskPhone } from "@/lib/utils/format";
 import { listTutors } from "@/server/services/users";
 
@@ -33,6 +35,7 @@ export default async function AdminTutorsPage({
       <PageHeader
         title="Padres y tutores"
         description="Usuarios de la app familiar, alumnos asociados y credencial de recogida."
+        action={<CreateUserButton defaultRole="PARENT" label="Nuevo tutor" />}
       />
 
       <Alert tone="info" className="mb-4">
@@ -104,6 +107,11 @@ export default async function AdminTutorsPage({
                       {!tutor.active ? (
                         <Badge className="bg-berry-50 text-berry-700 ring-berry-200" size="sm">
                           Cuenta inactiva
+                        </Badge>
+                      ) : null}
+                      {tutor.termsVersion !== TERMS_VERSION ? (
+                        <Badge className="bg-sun-50 text-sun-700 ring-sun-200" size="sm">
+                          Términos pendientes
                         </Badge>
                       ) : null}
                     </div>
