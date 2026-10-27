@@ -18,10 +18,17 @@ import { getMovementsCsvRows } from "@/server/services/reports";
  * (tutor, docente y dirección) se elegiría la primera que existiera, que
  * podría no ser la de dirección y haría fallar la descarga. Exportar reportes
  * es competencia exclusiva de dirección, así que esa es la sesión a usar.
+ *
+ * La aceptación de términos se comprueba aquí de forma explícita porque las
+ * rutas de `/api` no pasan por `requireUser()`: extraer datos del centro es
+ * precisamente una de las operaciones que el consentimiento habilita.
  */
 export async function GET(request: Request) {
   const user = await getCurrentUser("admin");
   if (!user) return new Response("No autorizado", { status: 401 });
+  if (!user.termsAccepted) {
+    return new Response("Términos pendientes de aceptación", { status: 403 });
+  }
   if (!can(user.role, "VIEW_REPORTS")) {
     return new Response("Acceso denegado", { status: 403 });
   }

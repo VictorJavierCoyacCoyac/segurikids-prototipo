@@ -11,6 +11,9 @@
  * El script trabaja sobre una base de datos independiente (`prisma/verify.db`),
  * por lo que NO altera los datos de la demostración en `prisma/dev.db`.
  */
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
 import { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../src/lib/db";
@@ -428,6 +431,50 @@ async function main() {
     "una aceptación de otra versión no se da por válida",
     stale.termsVersion !== TERMS_VERSION,
   );
+
+  // Ninguna puerta de entrada puede saltarse el consentimiento.
+  //
+  // Las pantallas lo tienen cubierto: pasan por `requireUser()`/`requireRole()`
+  // en el layout de su área. Las rutas de `/api` NO pasan por ahí —no pueden
+  // redirigir a una pantalla— así que cada una debe comprobar `termsAccepted`
+  // por su cuenta. Esta comprobación es estructural a propósito: así una ruta
+  // nueva que se olvide del requisito hace fallar la verificación en lugar de
+  // quedar abierta en silencio.
+  function routeFiles(dir: string): string[] {
+    const found: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) found.push(...routeFiles(path));
+      else if (entry.name === "route.ts") found.push(path);
+    }
+    return found;
+  }
+
+  const apiRoutes = routeFiles("src/app/api");
+  check("hay rutas de /api que verificar", apiRoutes.length > 0, `${apiRoutes.length}`);
+  for (const route of apiRoutes) {
+    const source = readFileSync(route, "utf8");
+    check(
+      `${route.replace("src/app/api/", "")} exige los términos aceptados`,
+      source.includes("termsAccepted"),
+      "falta la comprobación de termsAccepted",
+    );
+  }
+
+  // Lo mismo para las server actions: todas deben exigir términos salvo las dos
+  // que no pueden hacerlo (la propia aceptación y el cierre de sesión).
+  const SIN_TERMINOS = ["terms.ts", "auth.ts"];
+  const actionFiles = readdirSync("src/server/actions").filter(
+    (name) => name.endsWith(".ts") && name !== "types.ts" && !SIN_TERMINOS.includes(name),
+  );
+  for (const name of actionFiles) {
+    const source = readFileSync(join("src/server/actions", name), "utf8");
+    check(
+      `actions/${name} pasa por requireUser o requireRole`,
+      source.includes("requireUser(") || source.includes("requireRole("),
+      "usa un helper que no comprueba los términos",
+    );
+  }
 
   // ── 10 · Voceo y asistente ────────────────────────────────────────────────
   section("10 · Voceo y asistente de recogida");

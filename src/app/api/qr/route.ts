@@ -14,11 +14,19 @@ import { QR_PATTERN } from "@/lib/validation/schemas";
  * Requiere sesión: aunque el contenido no sea sensible, el endpoint no queda
  * abierto a Internet. Vale cualquiera de las sesiones abiertas (la credencial
  * la consultan tanto el tutor como dirección), por lo que no se fija un área.
+ *
+ * Requiere además los términos aceptados. Las rutas de `/api` no pasan por
+ * `requireUser()` —no pueden redirigir a una pantalla— así que la comprobación
+ * se repite aquí de forma explícita: una cuenta que todavía no ha dado su
+ * consentimiento no debe poder obtener su credencial por una vía alterna.
  */
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
     return new Response("No autorizado", { status: 401 });
+  }
+  if (!user.termsAccepted) {
+    return new Response("Términos pendientes de aceptación", { status: 403 });
   }
 
   const { searchParams } = new URL(request.url);

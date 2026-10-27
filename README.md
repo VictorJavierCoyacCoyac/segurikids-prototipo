@@ -189,6 +189,19 @@ por válido el anterior. La comprobación está centralizada en `requireUser()`,
 así que ninguna pantalla nueva puede olvidarse de ella, y cada aceptación queda
 en la auditoría como `TERMS_ACCEPT`.
 
+**Dónde aparece la puerta.** No es una casilla en el formulario de alta ni un
+aviso que se pueda cerrar: es una pantalla completa que intercepta el primer
+acceso de la cuenta. Dirección da de alta al tutor, el tutor entra con su
+contraseña y, antes de ver cualquier pantalla de `/app`, el sistema lo lleva a
+`/terminos/aceptar`. El botón está deshabilitado hasta marcar la casilla, y
+hasta que acepta no existe ninguna ruta de la aplicación que le responda.
+
+Las rutas de `/api` no pasan por `requireUser()` —no pueden redirigir a una
+pantalla— así que comprueban `termsAccepted` por su cuenta y responden **403**
+si falta. `npm run verify` incluye una comprobación estructural que recorre
+`src/app/api/**/route.ts` y `src/server/actions/*.ts` y falla si alguna ruta o
+acción nueva se olvida del requisito.
+
 ### Modelo de datos
 
 ```
