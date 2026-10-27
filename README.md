@@ -256,12 +256,33 @@ Abre <http://localhost:3000>.
 | `npm run db:reset` | Recrea la base de datos desde cero |
 | `npm run db:studio` | Explorador visual de la base de datos |
 | `npm run verify` | ⭐ Verifica automáticamente los flujos de demostración |
+| `npm run simulate` | Recorre la jornada completa de un tutor, paso a paso |
+| `npm run verify:qr` | Comprueba que el QR emitido es el que el lector decodifica |
 
 `npm run verify` ejecuta 75 comprobaciones sobre una base de datos
 independiente (`prisma/verify.db`, no toca tus datos) y confirma que la recogida
 autorizada, el bloqueo de personas no autorizadas, las emergencias, la auditoría,
 los reportes, las sesiones por área, la aceptación de términos y el voceo
 funcionan de verdad.
+
+`npm run simulate` cuenta una sola historia de principio a fin —el tutor deja al
+niño por la mañana, el niño pasa la jornada en el plantel y el tutor vuelve a
+recogerlo por la tarde— imprimiendo el estado real del sistema en cada paso: 34
+comprobaciones sobre `prisma/simulate.db`. Sirve para enseñar el ciclo de vida
+completo sin abrir el navegador.
+
+`npm run verify:qr` cierra el bucle del escáner sin necesidad de cámara: genera
+el PNG con las mismas opciones que `/api/qr`, lo decodifica a píxeles, lo reduce
+a 480 px igual que hace el lector y lo pasa por **jsQR**, el motor que corre en
+el móvil del docente cuando el navegador no trae `BarcodeDetector`. Admite
+además un PNG real:
+
+```bash
+npm run verify:qr -- ruta/al/codigo.png
+```
+
+Lo único que estas comprobaciones no cubren es la captura de vídeo en sí, que
+depende del navegador y del permiso que conceda el usuario.
 
 ---
 

@@ -15,7 +15,9 @@
     "db:reset": "prisma migrate reset --force",
     "db:studio": "prisma studio",
     "setup": "prisma migrate deploy && prisma generate && prisma db seed",
-    "verify": "DATABASE_URL=file:./verify.db prisma migrate deploy && DATABASE_URL=file:./verify.db prisma db seed && DATABASE_URL=file:./verify.db tsx scripts/verify-demo-flow.ts"
+    "verify": "DATABASE_URL=file:./verify.db prisma migrate deploy && DATABASE_URL=file:./verify.db prisma db seed && DATABASE_URL=file:./verify.db tsx scripts/verify-demo-flow.ts",
+    "simulate": "DATABASE_URL=file:./simulate.db prisma migrate deploy && DATABASE_URL=file:./simulate.db prisma db seed && DATABASE_URL=file:./simulate.db tsx scripts/simulate-tutor-lifecycle.ts",
+    "verify:qr": "tsx scripts/verify-qr-roundtrip.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
