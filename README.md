@@ -376,6 +376,26 @@ Mientras el puerto esté público cualquiera con el enlace entra, y las
 credenciales demo están visibles en la propia pantalla. Los datos son ficticios,
 pero conviene volver a poner el puerto en privado al terminar.
 
+> **Con el internet compartido del teléfono.** El túnel sale a internet y
+> vuelve, así que la laptop y la tableta tienen que estar conectadas las dos
+> aunque se vean en la misma red. El consumo de datos es bajo: los fotogramas de
+> la cámara se analizan en la tableta y nunca se envían, por la red solo viaja el
+> código leído. Pero si el internet compartido se cae, el enlace del túnel deja
+> de funcionar.
+>
+> **Plan B sin internet:** servir por la IP local (`http://192.168.x.x:3000`).
+> Así no hay cámara —no es contexto seguro— pero la entrada manual del código y
+> «Simular escaneo» ejecutan la misma validación de servidor. Para que la IP
+> local sea alcanzable desde otro dispositivo hay que abrir el puerto: con `ufw`
+> activo, la política de entrada por defecto es `DROP` y la aplicación responde
+> solo en la propia máquina.
+>
+> ```bash
+> sudo ufw allow 3000/tcp comment "SeguriKids demo"
+> # al terminar la demostración:
+> sudo ufw delete allow 3000/tcp
+> ```
+
 ### La cámara del móvil
 
 El escáner lee el QR con la cámara del dispositivo del personal, y para eso el
@@ -423,6 +443,51 @@ altavoz silenciado o con ruido.
   [`src/lib/domain/announcements.ts`](src/lib/domain/announcements.ts). No hay
   modelo de lenguaje ni llamadas de red, así que ningún dato del centro sale del
   dispositivo, y la interfaz lo dice para no sugerir una capacidad que no tiene.
+
+#### El voceo en Linux necesita un sintetizador en el sistema
+
+La Web Speech API **no trae voces propias**: usa las del sistema operativo. En
+Windows y macOS ya vienen instaladas; en Linux, normalmente no. Sin un
+sintetizador, `speechSynthesis.getVoices()` devuelve una lista vacía y el voceo
+falla **en silencio**: el aviso aparece en pantalla, no se oye nada y el
+navegador no reporta ningún error.
+
+En Arch / CachyOS:
+
+```bash
+sudo pacman -S speech-dispatcher espeak-ng
+```
+
+Instalar los paquetes no basta. El paquete deja
+`/etc/speech-dispatcher/speechd.conf` con **todas** las directivas comentadas,
+así que el demonio arranca sin sintetizador ni salida de audio y los clientes se
+quedan colgados al conectarse. Hay que declarar lo mínimo en la configuración
+del usuario, en `~/.config/speech-dispatcher/speechd.conf`:
+
+```conf
+AddModule "espeak-ng" "sd_espeak-ng" "espeak-ng.conf"
+DefaultModule espeak-ng
+AudioOutputMethod "pulse"        # válido también con PipeWire
+DefaultLanguage "es"
+DefaultVoiceType "FEMALE1"
+```
+
+Comprobación, de menor a mayor:
+
+```bash
+spd-say -w -l es "Prueba de voceo"    # debe hablar y terminar; si se cuelga, falta la configuración de arriba
+pactl list sink-inputs | grep espeak  # mientras habla debe verse el flujo speech-dispatcher-espeak-ng
+```
+
+**Reinicia el navegador después de configurarlo.** Chrome y Firefox cargan
+`libspeechd.so.2` al arrancar y consultan la lista de voces entonces: una
+pestaña abierta antes del arreglo seguirá muda.
+
+> **ANTES DE PRODUCCIÓN:** depender de las voces del sistema hace que el voceo
+> sea desigual entre dispositivos y nulo en algunos. Un sistema productivo
+> debería sintetizar el aviso en el servidor o reproducir audio pregrabado, de
+> forma que el dispositivo de la puerta no necesite configuración local. El
+> texto en pantalla debe seguir siendo la vía principal en cualquier caso.
 
 ## 5. Cuentas demo
 

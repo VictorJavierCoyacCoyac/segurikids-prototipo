@@ -43,12 +43,25 @@ export function useSpeech(): SpeechState {
       // Navegación privada o almacenamiento bloqueado: se asume voceo activo.
     }
 
-    /** Se prefiere una voz en español; si no hay, la predeterminada del sistema. */
+    /**
+     * Se prefiere una voz en español latinoamericano; si no hay, cualquier
+     * español, y si tampoco, la predeterminada del sistema.
+     *
+     * El orden importa porque la Web Speech API no trae voces propias: usa las
+     * del sistema operativo, y el catálogo cambia de un equipo a otro. En Linux
+     * con espeak-ng, por ejemplo, no existe `es-MX` pero sí `es-419`, y sin
+     * esta preferencia el voceo saldría con acento de España aunque haya una
+     * voz latinoamericana disponible.
+     */
     const pickVoice = () => {
       const voices = window.speechSynthesis.getVoices();
+      const byPrefix = (prefix: string) =>
+        voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix));
       voiceRef.current =
-        voices.find((voice) => voice.lang.toLowerCase().startsWith("es-mx")) ??
-        voices.find((voice) => voice.lang.toLowerCase().startsWith("es")) ??
+        byPrefix("es-mx") ?? // México
+        byPrefix("es-419") ?? // español latinoamericano (espeak-ng)
+        byPrefix("es-us") ??
+        byPrefix("es") ?? // cualquier español, incluido es-ES
         null;
     };
 
