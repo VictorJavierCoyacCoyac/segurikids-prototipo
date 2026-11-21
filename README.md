@@ -318,8 +318,9 @@ Abre <http://localhost:3000>.
 | `npm run verify` | ⭐ Verifica automáticamente los flujos de demostración |
 | `npm run simulate` | Recorre la jornada completa de un tutor, paso a paso |
 | `npm run verify:qr` | Comprueba que el QR emitido es el que el lector decodifica |
+| `npm run ensayo` | Ensayo general contra la base real y el servidor en marcha |
 
-`npm run verify` ejecuta 75 comprobaciones sobre una base de datos
+`npm run verify` ejecuta 113 comprobaciones sobre una base de datos
 independiente (`prisma/verify.db`, no toca tus datos) y confirma que la recogida
 autorizada, el bloqueo de personas no autorizadas, las emergencias, la auditoría,
 los reportes, las sesiones por área, la aceptación de términos y el voceo
@@ -341,8 +342,21 @@ además un PNG real:
 npm run verify:qr -- ruta/al/codigo.png
 ```
 
+`npm run ensayo` es el que se ejecuta **justo antes de presentar**, con el
+servidor ya levantado en el puerto 3000. A diferencia de los anteriores, trabaja
+sobre `prisma/dev.db` —los datos reales de la demostración— y pide las páginas
+por HTTP con cookies de sesión de verdad, así que comprueba la aplicación tal
+como la verá el público: las tres áreas abiertas a la vez en un mismo navegador,
+el QR del tutor en pantalla, el escaneo, el voceo, la entrega, el aviso a la
+familia, los tres códigos que deben ser rechazados y el botón de reinicio. Son
+46 comprobaciones y al terminar deja la jornada como estaba.
+
+Si el ensayo se interrumpe a la mitad puede quedar algún alumno fuera del
+plantel. Se arregla desde *Configuración* → **Reiniciar la jornada**.
+
 Lo único que estas comprobaciones no cubren es la captura de vídeo en sí, que
-depende del navegador y del permiso que conceda el usuario.
+depende del navegador y del permiso que conceda el usuario, y la síntesis de voz
+del dispositivo.
 
 ---
 
