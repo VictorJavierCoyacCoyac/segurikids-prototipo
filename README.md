@@ -420,6 +420,16 @@ Dos motores de decodificación, elegidos automáticamente:
    inservible. Se importa de forma dinámica para no cargar el decodificador en
    los navegadores que no lo necesitan.
 
+El código no se acepta al primer fotograma: tiene que permanecer dentro del
+marco **1,25 segundos** seguidos (`HOLD_MS` en
+[`camera-reader.tsx`](src/components/domain/scanner/camera-reader.tsx)). El
+decodificador lo resuelve mucho antes, en cuanto asoma por el borde del
+encuadre, y leerlo así desconcierta a quien lo muestra. Exigir que se mantenga
+centrado convierte la lectura en un gesto deliberado y evita registrar el código
+de alguien que solo pasaba por delante. Una pérdida de vista menor de 400 ms no
+reinicia la cuenta, para que un fotograma movido no obligue a empezar de nuevo.
+Mientras tanto, el marco se tiñe de verde y una barra muestra el progreso.
+
 Los fotogramas se analizan en el dispositivo y se descartan: no se graba ni se
 envía imagen a ningún servidor. Si no hay cámara, la entrada manual del código y
 «Simular escaneo» ejecutan **la misma** validación de servidor.

@@ -76,9 +76,8 @@ export default async function StaffAlertsPage() {
       </div>
 
       <p className="px-1 text-xs leading-relaxed text-ink-400">
-        Nota del prototipo: la resolución de alertas está reservada a la dirección del centro
-        (panel administrativo), de modo que el cierre de una emergencia siempre queda a cargo de un
-        responsable.
+        Nota del prototipo: solo la dirección del centro puede resolver una alerta desde el panel
+        administrativo. El cierre de una emergencia queda siempre a cargo de un responsable.
       </p>
     </div>
   );

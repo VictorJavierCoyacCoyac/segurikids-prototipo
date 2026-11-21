@@ -182,9 +182,9 @@ export default async function AdminSettingsPage() {
           Este prototipo no está listo para producción
         </p>
         <p className="mt-0.5 leading-relaxed">
-          Los datos son ficticios y las credenciales son públicas por diseño. Antes de operar con
-          información real de menores deben cubrirse los puntos de la siguiente tabla, además del
-          marco legal de protección de datos aplicable.
+          Los datos son ficticios y las credenciales de demostración están a la vista en la
+          pantalla de acceso. Antes de trabajar con información real de menores hay que cubrir los
+          puntos de la tabla siguiente y el marco legal de protección de datos que corresponda.
         </p>
       </Alert>
 
@@ -218,13 +218,13 @@ export default async function AdminSettingsPage() {
 
       <SectionCard
         title="Reiniciar los datos de demostración"
-        description="Vuelve a dejar el prototipo en su estado inicial antes de una presentación."
+        description="Devuelve los datos de la demostración a su estado inicial."
         icon={<Database className="h-5 w-5" />}
       >
         <p className="text-sm leading-relaxed text-ink-600">
-          Durante una demostración el guion se agota: al registrar una salida, el alumno queda fuera
-          del plantel y el siguiente escaneo del mismo código responde —correctamente— que ya no
-          está. Este botón repone el estado de la jornada para volver a mostrarlo.
+          Cuando se registra una salida, el alumno pasa a estar fuera del plantel y el siguiente
+          escaneo del mismo código ya no lo autoriza. Es el comportamiento correcto, pero impide
+          repetir la demostración. Este botón deja la jornada como estaba al principio.
         </p>
 
         <div className="mt-4">
@@ -232,18 +232,18 @@ export default async function AdminSettingsPage() {
         </div>
 
         <p className="mt-4 text-xs leading-relaxed text-ink-500">
-          Repone el estado operativo de los alumnos y elimina los movimientos y avisos generados al
-          demostrar. <strong>No cierra ninguna sesión</strong>: las cuentas, las autorizaciones y los
-          identificadores no se tocan, de modo que los dispositivos conectados siguen dentro. El
-          reinicio queda anotado en la bitácora de auditoría, igual que los escaneos de la
-          demostración, que tampoco se borran.
+          Restaura el estado de los alumnos y borra los movimientos y avisos creados durante la
+          demostración. <strong>No cierra ninguna sesión</strong>: las cuentas, las autorizaciones y
+          los identificadores no cambian, así que los dispositivos conectados siguen dentro. El
+          reinicio se registra en la bitácora de auditoría, donde también se conservan los escaneos
+          de la demostración.
         </p>
 
         <p className="mt-3 text-sm leading-relaxed text-ink-600">
-          Para volver al escenario completo desde cero —alumnado, tutores, autorizaciones, 30 días de
-          movimientos, notificaciones y auditoría— se ejecuta el seed en la terminal del proyecto.
-          Ten en cuenta que regenera todos los identificadores y, con ello,{" "}
-          <strong>cierra la sesión de todos los dispositivos</strong>.
+          Para reconstruir el escenario completo (alumnado, tutores, autorizaciones, 30 días de
+          movimientos, notificaciones y auditoría) hay que ejecutar el seed en la terminal del
+          proyecto. Regenera todos los identificadores, así que{" "}
+          <strong>cierra la sesión en todos los dispositivos</strong>.
         </p>
         <pre className="mt-3 overflow-x-auto rounded-2xl bg-ink-950 p-4 text-sm text-mint-300">
           <code>npm run db:seed</code>

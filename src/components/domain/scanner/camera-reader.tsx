@@ -26,6 +26,9 @@ import { QR_PATTERN } from "@/lib/validation/schemas";
  *
  * PRIVACIDAD: los fotogramas se procesan en el dispositivo para localizar el
  * código y se descartan. No se graba ni se envía imagen a ningún servidor.
+ *
+ * PERMANENCIA: el código no se acepta al primer fotograma, sino cuando lleva
+ * `HOLD_MS` encuadrado. Ver la constante para el motivo.
  */
 
 type DetectorLike = {
@@ -48,6 +51,30 @@ const JSQR_INTERVAL_MS = 120;
 /** Lado máximo del fotograma que se analiza (reduce el coste por intento). */
 const JSQR_MAX_SIDE = 480;
 
+/**
+ * Tiempo que el código debe permanecer encuadrado antes de darlo por leído.
+ *
+ * Es una decisión de interfaz, no un límite técnico. El decodificador resuelve
+ * el QR en cuanto asoma por el borde del encuadre, y leerlo así resulta
+ * desconcertante: la persona que lo muestra no llega a ver qué ha pasado.
+ * Exigir que se mantenga centrado convierte la lectura en un gesto deliberado y
+ * evita registrar el código de alguien que solo pasaba por delante.
+ *
+ * ANTES DE PRODUCCIÓN: revisar este valor con el personal del centro. En una
+ * puerta con fila, la espera que aquí aporta claridad puede estorbar.
+ */
+const HOLD_MS = 1250;
+
+/**
+ * Margen durante el cual una pérdida de vista no reinicia la cuenta. Un
+ * fotograma movido, un reflejo o un parpadeo no deberían obligar a empezar de
+ * nuevo; soltar el código de verdad, sí.
+ */
+const HOLD_GAP_MS = 400;
+
+/** Resultado de evaluar un candidato del bucle de escaneo. */
+type Observation = "accepted" | "holding" | "ignored";
+
 export function CameraReader({
   onDetected,
   disabled,
@@ -62,6 +89,11 @@ export function CameraReader({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lockedRef = useRef(false);
   const jsQrRef = useRef<JsQrFn | null>(null);
+  // Código que se está manteniendo a la vista, cuándo empezó y cuándo se vio
+  // por última vez. En refs y no en estado: se consultan en cada fotograma.
+  const holdCodeRef = useRef<string | null>(null);
+  const holdStartRef = useRef(0);
+  const holdSeenRef = useRef(0);
 
   const [status, setStatus] = useState<Status>("idle");
   const [engine, setEngine] = useState<Engine | null>(null);
@@ -71,6 +103,8 @@ export function CameraReader({
   // vuelva a arrancar el vídeo por un simple cambio de identidad de `start`.
   const restartRef = useRef(false);
   const [restartToken, setRestartToken] = useState(0);
+  // Progreso de la permanencia (0 a 1), solo para la barra de la interfaz.
+  const [holdProgress, setHoldProgress] = useState(0);
 
   const stop = useCallback(() => {
     if (rafRef.current !== null) {
@@ -86,25 +120,65 @@ export function CameraReader({
     setStatus((current) => (current === "scanning" || current === "starting" ? "idle" : current));
   }, []);
 
-  /** Acepta el primer código con el formato del centro y bloquea el bucle. */
-  const accept = useCallback(
-    (raw: string | null | undefined): boolean => {
+  const resetHold = useCallback(() => {
+    holdCodeRef.current = null;
+    holdStartRef.current = 0;
+    holdSeenRef.current = 0;
+    setHoldProgress((current) => (current === 0 ? current : 0));
+  }, []);
+
+  /**
+   * Evalúa un candidato del bucle de escaneo.
+   *
+   * Solo devuelve `accepted` cuando el mismo código lleva `HOLD_MS` encuadrado.
+   * Las demás llamadas acumulan tiempo (`holding`) o lo descartan por formato
+   * (`ignored`).
+   */
+  const observe = useCallback(
+    (raw: string | null | undefined): Observation => {
       const value = (raw ?? "").trim().toUpperCase();
-      if (!QR_PATTERN.test(value)) return false;
-      lockedRef.current = true;
-      onDetected(value);
-      stop();
-      return true;
+      if (!QR_PATTERN.test(value)) return "ignored";
+
+      const now = performance.now();
+      const continues =
+        holdCodeRef.current === value && now - holdSeenRef.current <= HOLD_GAP_MS;
+
+      if (!continues) {
+        holdCodeRef.current = value;
+        holdStartRef.current = now;
+      }
+      holdSeenRef.current = now;
+
+      const elapsed = now - holdStartRef.current;
+      if (elapsed >= HOLD_MS) {
+        lockedRef.current = true;
+        setHoldProgress(1);
+        onDetected(value);
+        stop();
+        return "accepted";
+      }
+
+      // La barra se repinta a saltos para no provocar un render por fotograma.
+      const progress = Math.min(1, elapsed / HOLD_MS);
+      setHoldProgress((current) => (Math.abs(current - progress) < 0.04 ? current : progress));
+      return "holding";
     },
     [onDetected, stop],
   );
+
+  /** Fotograma sin código legible: pasado el margen, se reinicia la cuenta. */
+  const missed = useCallback(() => {
+    if (holdCodeRef.current === null) return;
+    if (performance.now() - holdSeenRef.current <= HOLD_GAP_MS) return;
+    resetHold();
+  }, [resetHold]);
 
   const start = useCallback(async () => {
     // 1. ¿Se puede usar la cámara en este origen?
     if (typeof window !== "undefined" && !window.isSecureContext) {
       setStatus("insecure");
       setMessage(
-        "El navegador solo concede la cámara en conexiones seguras (https) o en localhost. Abre el prototipo por su enlace https —el túnel público— o usa la entrada manual.",
+        "El navegador solo concede la cámara en conexiones seguras (https) o en localhost. Abre el prototipo por su enlace https o usa la entrada manual.",
       );
       return;
     }
@@ -120,6 +194,7 @@ export function CameraReader({
     setStatus("starting");
     setMessage(null);
     lockedRef.current = false;
+    resetHold();
 
     // 2. Motor de decodificación: nativo si existe, respaldo en JS si no.
     const detectorCtor = (
@@ -185,9 +260,13 @@ export function CameraReader({
           if (!current || lockedRef.current) return;
           try {
             const found = await detector.detect(current);
+            let holding = false;
             for (const item of found) {
-              if (accept(item.rawValue)) return;
+              const result = observe(item.rawValue);
+              if (result === "accepted") return;
+              if (result === "holding") holding = true;
             }
+            if (!holding) missed();
           } catch {
             // Un fotograma ilegible no debe detener el bucle de escaneo.
           }
@@ -220,7 +299,9 @@ export function CameraReader({
             const found = decode(frame.data, canvas.width, canvas.height, {
               inversionAttempts: "dontInvert",
             });
-            if (found && accept(found.data)) return;
+            const result = found ? observe(found.data) : "ignored";
+            if (result === "accepted") return;
+            if (result !== "holding") missed();
           } catch {
             // Igual que arriba: se intenta con el siguiente fotograma.
           }
@@ -245,7 +326,7 @@ export function CameraReader({
         setMessage("No fue posible iniciar la cámara en este dispositivo.");
       }
     }
-  }, [accept, facingMode]);
+  }, [facingMode, missed, observe, resetHold]);
 
   // Liberar la cámara al desmontar: nunca debe quedar activa en segundo plano.
   useEffect(() => stop, [stop]);
@@ -280,7 +361,12 @@ export function CameraReader({
               "left-0 bottom-0 border-b-4 border-l-4 rounded-bl-2xl",
               "right-0 bottom-0 border-b-4 border-r-4 rounded-br-2xl",
             ].map((corner) => (
-              <span key={corner} className={`absolute h-8 w-8 border-white/90 ${corner}`} />
+              <span
+                key={corner}
+                className={`absolute h-8 w-8 transition-colors ${
+                  holdProgress > 0 ? "border-mint-400" : "border-white/90"
+                } ${corner}`}
+              />
             ))}
             {status === "scanning" ? (
               <span className="absolute inset-x-2 top-0 h-0.5 animate-scan-line rounded-full bg-mint-400 shadow-[0_0_12px_2px_rgba(52,211,153,0.8)]" />
@@ -309,7 +395,7 @@ export function CameraReader({
               </p>
               <p className="mx-auto mt-1 max-w-xs text-xs leading-snug text-white/70">
                 {message ??
-                  "Activa la cámara y apúntala al código QR que el tutor muestra en su teléfono."}
+                  "Activa la cámara y mantén dentro del marco el código QR que el tutor muestra en su teléfono."}
               </p>
             </div>
           </div>
@@ -325,11 +411,23 @@ export function CameraReader({
         ) : null}
 
         {status === "scanning" ? (
-          <div className="absolute inset-x-0 bottom-3 flex justify-center">
-            <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white/90">
-              Buscando código ·{" "}
-              {engine === "native" ? "lector del navegador" : "lector compatible (jsQR)"}
-            </span>
+          <div className="absolute inset-x-0 bottom-3 flex justify-center px-6">
+            {holdProgress > 0 ? (
+              <span className="w-full max-w-[15rem] rounded-2xl bg-black/65 px-3 py-2 text-center text-xs font-semibold text-white">
+                Mantén el código dentro del marco
+                <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-white/25">
+                  <span
+                    className="block h-full rounded-full bg-mint-400"
+                    style={{ width: `${Math.round(holdProgress * 100)}%` }}
+                  />
+                </span>
+              </span>
+            ) : (
+              <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white/90">
+                Buscando código ·{" "}
+                {engine === "native" ? "lector del navegador" : "lector compatible (jsQR)"}
+              </span>
+            )}
           </div>
         ) : null}
       </div>

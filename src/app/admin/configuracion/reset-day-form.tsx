@@ -32,9 +32,9 @@ export function ResetDayForm() {
             ¿Reiniciar la jornada de demostración?
           </p>
           <p className="mt-1 text-sm leading-relaxed text-ink-600">
-            Se repondrá el estado de los alumnos y se borrarán los movimientos y avisos generados
-            durante la demostración. Las cuentas, las autorizaciones y las sesiones abiertas no se
-            tocan.
+            Se restaurará el estado de los alumnos y se borrarán los movimientos y avisos creados
+            durante la demostración. Las cuentas, las autorizaciones y las sesiones abiertas no
+            cambian.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <form action={formAction} onSubmit={() => setConfirming(false)}>
