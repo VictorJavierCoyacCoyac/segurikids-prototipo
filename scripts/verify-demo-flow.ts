@@ -18,9 +18,10 @@ import { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../src/lib/db";
 import { can } from "../src/lib/auth/permissions";
-import { AREA_BY_ROLE, cookieName } from "../src/lib/auth/session";
+import { AREA_BY_ROLE, areaForPath, cookieName } from "../src/lib/auth/session";
 import { verifyPassword } from "../src/lib/auth/password";
 import { assistantReply, buildAnnouncement } from "../src/lib/domain/announcements";
+import { DEMO_DAY_STATUS, demoDayKey, expectedMovements } from "../src/lib/domain/demo-day";
 import { TERMS_VERSION } from "../src/lib/domain/terms";
 import {
   listStudentMovements,
@@ -33,7 +34,8 @@ import { getDashboardSnapshot } from "../src/server/services/dashboard";
 import { getReportData } from "../src/server/services/reports";
 import { listNotifications } from "../src/server/services/notifications";
 import { listAuditLogs } from "../src/server/services/audit";
-import { addDays } from "../src/lib/utils/date";
+import { resetDemoDay } from "../src/server/services/demo";
+import { addDays, startOfDay } from "../src/lib/utils/date";
 
 let passed = 0;
 let failed = 0;
@@ -54,6 +56,17 @@ function section(title: string) {
 
 async function main() {
   const db: PrismaClient = prisma;
+
+  // Foto del estado inicial, ANTES de que las secciones siguientes muevan a
+  // nadie: es con esto con lo que se compara el escenario de `demo-day.ts`.
+  const seededStatus = new Map(
+    (
+      await db.student.findMany({
+        where: { active: true },
+        select: { firstName: true, lastName: true, status: true },
+      })
+    ).map((student) => [demoDayKey(student), student.status] as const),
+  );
 
   const school = await db.school.findFirst();
   if (!school) throw new Error("No hay datos. Ejecuta `npm run db:seed` primero.");
@@ -394,6 +407,36 @@ async function main() {
     new Set(Object.values(AREA_BY_ROLE).map(cookieName)).size === 3,
   );
 
+  // `areaForPath` es lo que decide con qué cookie se identifica cada petición.
+  // Un error aquí haría que una pestaña usara la sesión de otra, que es
+  // justamente lo que el diseño por áreas tiene que impedir.
+  const areaCases: Array<[string, "app" | "staff" | "admin" | null]> = [
+    ["/app", "app"],
+    ["/app/qr", "app"],
+    ["/app/hijos/abc", "app"],
+    ["/staff", "staff"],
+    ["/staff/escaner", "staff"],
+    ["/admin", "admin"],
+    ["/admin/configuracion", "admin"],
+    // Rutas públicas: no pertenecen a ningún área.
+    ["/", null],
+    ["/login", null],
+    ["/terminos", null],
+    ["/terminos/aceptar", null],
+    ["/api/qr", null],
+    // Prefijos que SE PARECEN a un área pero no lo son.
+    ["/appointments", null],
+    ["/administracion", null],
+    ["/staffroom", null],
+  ];
+  for (const [path, expected] of areaCases) {
+    check(
+      `«${path}» se resuelve como ${expected ?? "ruta pública"}`,
+      areaForPath(path) === expected,
+      String(areaForPath(path)),
+    );
+  }
+
   // ── 9 · Términos y aviso de privacidad ────────────────────────────────────
   section("9 · Términos y aviso de privacidad");
 
@@ -534,6 +577,106 @@ async function main() {
     assistantReply("cuál es la capital de Francia", assistantContext).text.includes(
       "No tengo una respuesta guionizada",
     ),
+  );
+
+  // ── 11 · Reinicio de la jornada de demostración ───────────────────────────
+  section("11 · Reinicio de la jornada de demostración");
+
+  // El escenario que describe `demo-day.ts` tiene que ser el mismo que deja el
+  // seed. Si alguien cambia `todayStatus` en el seed y se olvida del módulo, el
+  // reinicio dejaría la jornada en un estado que nunca existió.
+  const mismatched = [...seededStatus.entries()].filter(
+    ([name, status]) => DEMO_DAY_STATUS[name] !== status,
+  );
+  check(
+    "el escenario de demo-day.ts coincide con el estado que deja el seed",
+    mismatched.length === 0,
+    mismatched.map(([name, status]) => `${name}=${status}`).join(", "),
+  );
+  check(
+    "demo-day.ts describe a todos los alumnos del escenario",
+    [...seededStatus.keys()].every((name) => DEMO_DAY_STATUS[name] !== undefined),
+    `${seededStatus.size} alumnos`,
+  );
+
+  // Se altera la jornada como lo haría una demostración y se comprueba que el
+  // reinicio la repone.
+  const demoChild = await db.student.findFirstOrThrow({
+    where: { firstName: "Sofía", status: "IN_CAMPUS" },
+    include: { tutor: true },
+  });
+  const demoPerson = await db.authorizedPerson.findFirstOrThrow({
+    where: { qrIdentifier: "SK-DEMO-000101" },
+  });
+
+  await registerMovement({
+    type: "EXIT",
+    studentIds: [demoChild.id],
+    method: "QR",
+    authorizedPersonId: demoPerson.id,
+    actor: { id: staff.id, name: staff.name, schoolId: school.id },
+  });
+
+  const afterPickup = await db.student.findUniqueOrThrow({ where: { id: demoChild.id } });
+  check(
+    "tras la recogida el alumno queda fuera del plantel (el guion se agota)",
+    afterPickup.status === "OFF_CAMPUS",
+    afterPickup.status,
+  );
+
+  const resetSummary = await resetDemoDay(school.id);
+
+  const afterReset = await db.student.findUniqueOrThrow({ where: { id: demoChild.id } });
+  check(
+    "el reinicio devuelve al alumno a su estado inicial",
+    afterReset.status === DEMO_DAY_STATUS[demoDayKey(afterReset)],
+    afterReset.status,
+  );
+  check("el reinicio informa de lo que repuso", resetSummary.studentsRestored >= 1);
+  check("el reinicio borró el movimiento de la demostración", resetSummary.movementsRemoved >= 1);
+  const expectedToday = expectedMovements(DEMO_DAY_STATUS[demoDayKey(afterReset)]!);
+  check(
+    "solo quedan los movimientos que su estado inicial justifica",
+    (await db.attendanceEvent.count({
+      where: { studentId: demoChild.id, timestamp: { gte: startOfDay() } },
+    })) === expectedToday.entries + expectedToday.exits,
+  );
+  check(
+    "y son del tipo correcto (una entrada, ninguna salida)",
+    (await db.attendanceEvent.count({
+      where: { studentId: demoChild.id, type: "ENTRY", timestamp: { gte: startOfDay() } },
+    })) === expectedToday.entries &&
+      (await db.attendanceEvent.count({
+        where: { studentId: demoChild.id, type: "EXIT", timestamp: { gte: startOfDay() } },
+      })) === expectedToday.exits,
+  );
+  check(
+    "el reinicio no deja alumnos del escenario sin describir",
+    resetSummary.missing.length === 0,
+    resetSummary.missing.join(", "),
+  );
+
+  // Volver a aplicarlo no debe cambiar nada: la operación es idempotente.
+  const secondReset = await resetDemoDay(school.id);
+  check(
+    "aplicarlo dos veces no altera nada (idempotente)",
+    secondReset.studentsRestored === 0 && secondReset.movementsRemoved === 0,
+    `repuestos=${secondReset.studentsRestored} movimientos=${secondReset.movementsRemoved}`,
+  );
+
+  // Lo que el reinicio NO debe tocar.
+  check(
+    "el reinicio no borra cuentas (las sesiones siguen vivas)",
+    (await db.user.count()) > 0 &&
+      (await db.user.findUnique({ where: { id: parent.id } })) !== null,
+  );
+  check(
+    "el reinicio no borra autorizaciones",
+    (await db.studentAuthorizedPerson.count({ where: { authorizedPersonId: demoPerson.id } })) > 0,
+  );
+  check(
+    "el reinicio conserva la bitácora de auditoría de la demostración",
+    (await db.auditLog.count({ where: { action: "EXIT_REGISTER" } })) > 0,
   );
 
   // ── Resumen ───────────────────────────────────────────────────────────────

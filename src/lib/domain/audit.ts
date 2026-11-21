@@ -22,6 +22,7 @@ export const AUDIT_ACTIONS = [
   "INCIDENT_CREATE",
   "MESSAGE_SEND",
   "REPORT_EXPORT",
+  "DEMO_DAY_RESET",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -48,6 +49,7 @@ export const AUDIT_ACTION_META: Record<
   INCIDENT_CREATE: { label: "Incidencia reportada", tone: "warn" },
   MESSAGE_SEND: { label: "Mensaje enviado", tone: "neutral" },
   REPORT_EXPORT: { label: "Exportación de reporte", tone: "info" },
+  DEMO_DAY_RESET: { label: "Reinicio de la jornada (demo)", tone: "warn" },
 };
 
 export const AUDIT_TONE_CLASS: Record<string, string> = {

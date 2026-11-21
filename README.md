@@ -176,6 +176,53 @@ Detalles que sostienen el diseño:
 vez en el mismo navegador siguen requiriendo dos perfiles de navegador o dos
 dispositivos.
 
+**Comprobado en vivo** con las tres cookies en un mismo navegador: las nueve
+rutas de las tres áreas responden 200 a la vez, y cada área muestra su propio
+usuario. Con una sola cookie, las áreas ajenas redirigen al acceso (307), y un
+token válido colocado en la cookie de otra área se rechaza, porque cada cookie
+solo admite los roles de la suya. `npm run verify` cubre además la resolución de
+área ruta por ruta, incluidos los prefijos que se parecen a un área sin serlo
+(`/appointments`, `/administracion`, `/staffroom` son rutas públicas, no `/app`,
+`/admin` ni `/staff`).
+
+### Reinicio de la jornada (solo demostración)
+
+Durante una presentación el guion se agota: al registrar la salida de un alumno
+queda en `OFF_CAMPUS` y el siguiente escaneo del mismo código responde —con
+razón— que ya no está en el plantel. En un stand con visitantes toda la mañana,
+eso deja el guion inservible al primer pase.
+
+Dirección tiene por eso un botón **«Reiniciar la jornada»** en *Configuración*
+(`src/server/actions/demo.ts` → `src/server/services/demo.ts`). Repone el estado
+operativo de los alumnos y retira los movimientos y avisos generados al
+demostrar, **sin cerrar ninguna sesión**.
+
+Esto último es el motivo de que no se limite a volver a sembrar: el seed
+regenera todos los `cuid`, y con ellos invalida las cookies de todos los
+dispositivos conectados. En mitad de una demostración con tres pantallas
+encendidas, eso significa volver a entrar en las tres.
+
+Cómo distingue la mañana de la demostración: no por marcas en los datos, que
+serían frágiles, sino por el estado esperado. `src/lib/domain/demo-day.ts`
+declara con qué estado arranca cada alumno; de ahí se deduce qué movimientos
+justifica (ninguno si está ausente, una entrada si está en el plantel, entrada y
+salida si ya fue recogido), se conservan los primeros de cada tipo y se descarta
+el resto. La operación es por tanto **idempotente**.
+
+No borra la bitácora de auditoría: los escaneos de la demostración quedan
+registrados —son la prueba de que el sistema los anotó— y el propio reinicio se
+audita como `DEMO_DAY_RESET`.
+
+`npm run verify` comprueba que el escenario de `demo-day.ts` coincide con lo que
+deja el seed, que una recogida seguida de un reinicio devuelve al alumno a su
+estado inicial, que aplicarlo dos veces no cambia nada, y que no desaparecen
+cuentas ni autorizaciones.
+
+> **ANTES DE PRODUCCIÓN:** eliminar `src/lib/domain/demo-day.ts`,
+> `src/server/services/demo.ts`, `src/server/actions/demo.ts` y la tarjeta de
+> *Configuración*. No existe ningún caso real en el que el personal deba poder
+> deshacer los movimientos del día.
+
 ### Términos y aviso de privacidad
 
 El texto vive en [`src/lib/domain/terms.ts`](src/lib/domain/terms.ts) y lo
